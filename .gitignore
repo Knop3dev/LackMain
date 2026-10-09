@@ -1,0 +1,12 @@
+/target/
+/build/
+/dist/
+/node/
+/evidence/
+/stats.json
+/miner-config.*
+/miner.conf
+*.log
+*.jsonl
+*.obj
+*.exe

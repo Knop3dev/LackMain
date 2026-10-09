@@ -1,0 +1,36 @@
+name: Build lackminer qbtc
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-2022
+            platform: windows
+          - os: ubuntu-22.04
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - if: runner.os == 'Windows'
+        run: cmake -S gpu-control -B build/gpu-control
+      - if: runner.os == 'Windows'
+        run: cmake --build build/gpu-control --config Release
+      - if: runner.os == 'Windows'
+        run: python tools/package.py --platform windows --binary target/release/lackminer-qbtc.exe --helper build/gpu-control/Release/lackminer-gpu-control.exe --adlx-license "build/gpu-control/_deps/adlx-src/ADLX SDK License Agreement.pdf"
+      - if: runner.os == 'Linux'
+        run: python3 tools/package.py --platform linux --binary target/release/lackminer-qbtc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lackminer-qbtc-${{ matrix.platform }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS-*.txt

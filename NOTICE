@@ -1,0 +1,4 @@
+lackminer qbtc uses Q-BTC header, transaction and address formats from Q-Jack-core/quantum-btc.
+The OpenCL implementation uses the system OpenCL runtime supplied by the GPU driver.
+The Windows AMD control helper uses the official AMD ADLX SDK, commit 32b5a740d42295c5dfe9026b9f52683da0f3af91.
+Third-party dependency licenses are included in release archives under licenses/.
