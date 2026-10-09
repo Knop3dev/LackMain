@@ -74,6 +74,11 @@ unsafe fn devices(a:&Api)->Result<Vec<Handle>,String>{
 }
 pub fn list()->Result<(),String>{unsafe{let a=Api::load()?;for (i,d) in devices(&a)?.iter().enumerate(){
     let id=identity(&a,*d);println!("GPU{i}: {} | {} | {} | PCI {}",id.name,id.vendor,device_text(&a,*d,0x102d),id.pci.as_deref().unwrap_or("unavailable"));}Ok(())}}
+pub fn list_json()->Result<(),String>{unsafe{
+    let a=Api::load()?;let rows:Vec<_>=devices(&a)?.iter().enumerate().map(|(i,d)|{
+        let id=identity(&a,*d);serde_json::json!({"index":i,"name":id.name,"vendor":id.vendor,"pci":id.pci,"driver":device_text(&a,*d,0x102d)})
+    }).collect();println!("{}",serde_json::json!(rows));Ok(())
+}}
 
 #[derive(Clone, Debug)]
 pub struct DeviceIdentity { pub name:String, pub vendor:String, pub pci:Option<String> }
@@ -86,6 +91,19 @@ unsafe fn identity(a:&Api,d:Handle)->DeviceIdentity {
         let mut topo=[0u8;24];
         if (a.clGetDeviceInfo)(d,0x4037,24,topo.as_mut_ptr().cast(),std::ptr::null_mut())==0 && u32::from_ne_bytes(topo[..4].try_into().unwrap())==1 {
             pci=Some(format!("0000:{:02x}:{:02x}.{}",topo[21],topo[22],topo[23]));
+        }
+    }
+    if pci.is_none() && vendor.contains("NVIDIA") {
+        let mut uuid=[0u8;16];
+        if (a.clGetDeviceInfo)(d,0x106a,uuid.len(),uuid.as_mut_ptr().cast(),std::ptr::null_mut())==0 {
+            if let Ok(rows)=std::process::Command::new("nvidia-smi").args(["--query-gpu=uuid,pci.bus_id","--format=csv,noheader,nounits"]).output() {
+                let wanted=crate::hex(&uuid);
+                for line in String::from_utf8_lossy(&rows.stdout).lines(){if let Some((id,bus))=line.split_once(',') {
+                    if id.trim().strip_prefix("GPU-").map(|s|s.replace('-',"").to_lowercase())==Some(wanted.clone()) {
+                        let b=bus.trim().to_lowercase();pci=Some(if b.len()==16 {b[4..].to_string()}else{b});break;
+                    }
+                }}
+            }
         }
     }
     if pci.is_none() && vendor.contains("NVIDIA") {

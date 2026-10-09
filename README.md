@@ -8,7 +8,7 @@ Fee address: `qbtc10y29nvfuwyxfxhkl4yqkenw4u6hshsk9zgaf5ctz4zfpa2gxe45qtwawce`.
 
 ## Download and start
 
-Download your package from [Releases](https://github.com/Knop3dev/LackMain/releases/tag/v0.2.0).
+Download your package from [Releases](https://github.com/Knop3dev/LackMain/releases/tag/v0.2.1).
 
 - **Windows:** extract the archive and run `start-windows.cmd`.
 - **Linux:** Ubuntu 22.04 or newer, the GPU vendor's OpenCL driver, `curl`, `tar` and `util-linux`. Extract the archive and run `bash start-linux.sh`.
@@ -43,9 +43,11 @@ Press `Ctrl+C` to stop the miner. The node stays running. Launchers restart the 
 
 ## Hive OS
 
-Use an Ubuntu 22.04 or newer image with OpenCL drivers. In the Flight Sheet, choose Custom miner, name `lackminer-qbtc`, and use the [Hive OS package URL](https://github.com/Knop3dev/LackMain/releases/download/v0.2.0/lackminer-qbtc-0.2.0-hiveos.tar.gz). Wallet template: your public Q-BTC address. Leave Pool URL empty. Extra config: `--device 0 --max-power 120 --intensity 100`.
+Use an Ubuntu 22.04 or newer image with OpenCL drivers. In the Flight Sheet, choose Custom miner, name `lackminer-qbtc`, and use the [Hive OS package URL](https://github.com/Knop3dev/LackMain/releases/download/v0.2.1/lackminer-qbtc-0.2.1-hiveos.tar.gz). Wallet template: your public Q-BTC address. Leave Pool URL empty. Extra config: `--devices all --max-power 120 --intensity 100`.
 
-Use Hive OS OC profiles for clocks and fans. Each miner instance handles one GPU. Reserve disk space for the local node.
+All detected GPUs are used by default, including mixed AMD/NVIDIA workers. To select cards, use `--devices 0,1,2`. Hive displays the total hashrate and per-GPU statistics. Failed GPU processes restart independently. One local node and one synchronization monitor serve the entire worker; Pool URL is not required for SOLO mining. `--max-power` applies to each GPU separately. Use Hive OS OC profiles for clocks and fans. Reserve disk space for the node.
+
+New Hive installations store node data in `/hive/opt/lackminer-qbtc/node`, outside the miner package. To choose a disk, add `--node-dir /mnt/disk/qbtc-node` to Extra config. Existing node directories from earlier installations are reused.
 
 ## Build
 
@@ -96,7 +98,9 @@ lackminer-qbtc --solo --node http://127.0.0.1:24002 --user YOUR_QBTC_ADDRESS --d
 
 ### Hive OS
 
-Используйте образ на Ubuntu 22.04 или новее и рабочий OpenCL-драйвер. В Flight Sheet выберите Custom miner, имя `lackminer-qbtc`, URL релизного `lackminer-qbtc-0.2.0-hiveos.tar.gz`. Wallet template — ваш публичный Q-BTC адрес, Pool URL не требуется. Extra config, например: `--device 0 --max-power 120 --intensity 100`. Частоты и вентилятор можно задать штатным OC-профилем Hive OS. Один экземпляр обслуживает одну GPU. Следите за свободным местом для локальной ноды.
+Используйте образ на Ubuntu 22.04 или новее и рабочий OpenCL-драйвер. В Flight Sheet выберите Custom miner, имя `lackminer-qbtc`, URL релизного `lackminer-qbtc-0.2.1-hiveos.tar.gz`. Wallet template — ваш публичный Q-BTC адрес, Pool URL не требуется. Extra config, например: `--devices all --max-power 120 --intensity 100`. Частоты и вентилятор можно задать штатным OC-профилем Hive OS. По умолчанию используются все обнаруженные GPU, включая смешанные AMD/NVIDIA-воркеры. Для выбора карт укажите `--devices 0,1,2`. Hive показывает общий хешрейт и статистику каждой карты. Упавший процесс отдельной GPU перезапускается автоматически. На весь воркер работает одна локальная нода и одна проверка синхронизации; Pool URL для SOLO не требуется. `--max-power` задаёт бюджет каждой GPU отдельно. Следите за свободным местом для ноды.
+
+При новой установке Hive данные ноды хранятся в `/hive/opt/lackminer-qbtc/node`, отдельно от пакета майнера. Другой диск задаётся в Extra config: `--node-dir /mnt/disk/qbtc-node`. Существующий каталог ноды прежней установки используется повторно.
 
 ### Сборка
 

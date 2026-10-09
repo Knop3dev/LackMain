@@ -90,6 +90,7 @@ fn assemble(template: &Template, address: &str, timestamp: u64)->Result<(Block,R
 }
 static STATS_PATH:std::sync::OnceLock<std::path::PathBuf>=std::sync::OnceLock::new();
 fn emit(file: &mut Option<File>, mut event: Value){
+    event["version"]=json!(env!("CARGO_PKG_VERSION"));
     event["updated_at"]=json!(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
     if event["event"]=="stats" {if let Some(path)=STATS_PATH.get(){let temp=path.with_extension("tmp");if std::fs::write(&temp,event.to_string()).is_ok(){let _=std::fs::rename(temp,path);}}}
     if let Some(f)=file {let _=writeln!(f,"{event}");let _=f.flush();}
@@ -105,7 +106,21 @@ fn get_template(client:&reqwest::blocking::Client,url:&str,address:&str)->Result
     client.post(format!("{url}/api/get_block_template")).json(&json!({"miner_address":address}))
         .send().and_then(|r|r.error_for_status()).and_then(|r|r.json()).map_err(|e|e.to_string())
 }
-pub fn mine(o:Options)->Result<(),String>{
+pub fn watch_chain(o:&Options)->Result<(),String>{
+    node_url(&o.node)?;validate_address(&o.user)?;
+    let path=std::path::PathBuf::from(o.chain_state.as_ref().ok_or("--chain-state is required for --chain-watch")?);
+    if let Some(parent)=path.parent(){if !parent.as_os_str().is_empty(){std::fs::create_dir_all(parent).map_err(|e|e.to_string())?;}}
+    let stop=Arc::new(AtomicBool::new(false));
+    let guard=chain_guard::ChainGuard::start(o.node.trim_end_matches('/').into(),o.user.clone(),stop.clone());
+    let result=(||{while !crate::interrupted(){
+        let temp=path.with_extension("tmp");
+        std::fs::write(&temp,serde_json::to_vec(&guard.snapshot()).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        std::fs::rename(temp,&path).map_err(|e|e.to_string())?;
+        std::thread::sleep(Duration::from_millis(200));
+    }Ok(())})();
+    stop.store(true,Ordering::Relaxed);result
+}
+pub fn mine(o:Options,gpu:Gpu)->Result<(),String>{
     node_url(&o.node)?;payout_hash(&o.user)?;
     if let Some(path)=&o.stats_file {let p=std::path::PathBuf::from(path);if let Some(parent)=p.parent(){if !parent.as_os_str().is_empty(){std::fs::create_dir_all(parent).map_err(|e|e.to_string())?;}}let _=STATS_PATH.set(p);}
     let url=o.node.trim_end_matches('/');
@@ -113,20 +128,21 @@ pub fn mine(o:Options)->Result<(),String>{
         .redirect(reqwest::redirect::Policy::none()).build().map_err(|e|e.to_string())?;
     let relay=reqwest::blocking::Client::builder().connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(4)).redirect(reqwest::redirect::Policy::none()).build().map_err(|e|e.to_string())?;
-    let mut file=match &o.log {Some(p)=>Some(File::create(p).map_err(|e|e.to_string())?),None=>None};
+    let mut file=match &o.log {Some(p)=>Some(std::fs::OpenOptions::new().create(true).append(true).open(p).map_err(|e|e.to_string())?),None=>None};
     let stop=Arc::new(AtomicBool::new(false));let flag=stop.clone();
     std::thread::spawn(move||{use std::io::BufRead;for line in std::io::stdin().lock().lines(){
         if line.map(|s|s.trim()=="stop").unwrap_or(false){flag.store(true,Ordering::Relaxed);break;}}
         
         
     });
-    let gpu=Gpu::new(o.device,o.unroll)?;
     let mut controls=crate::gpu_control::Monitor::new(&gpu.identity,&o)?;
-    let guard=chain_guard::ChainGuard::start(url.to_string(),o.user.clone(),stop.clone());
+    let guard=match &o.chain_state {Some(path)=>chain_guard::ChainGuard::follow(path.into(),stop.clone()),None=>chain_guard::ChainGuard::start(url.to_string(),o.user.clone(),stop.clone())};
     let start=Instant::now();let mut last=Instant::now();let mut last_count=0u64;
     let(mut count,mut accepted,mut rejected,mut stale)=(0u64,0u64,0u64,0u64);
     let mut compute_seconds=0.0f64;
-    let mut nonce=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+    let clock=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+    let mut ranges=crate::nonce::Ranges::new(o.nonce_base.unwrap_or(clock),o.batch,o.nonce_lane,o.nonce_lanes);
+    if o.nonce_lanes>1{ranges.start_at(clock);}
     let mut active:Option<(Template,Block,RewardSplit)>=None;
     let mut next_poll=Instant::now();
     let mut guard_notice=Instant::now()-Duration::from_secs(10);
@@ -184,10 +200,11 @@ pub fn mine(o:Options)->Result<(),String>{
                 std::thread::sleep(Duration::from_millis(50));continue;
             }
             let dispatch_start=Instant::now();
+            let nonce=ranges.next().ok_or("Nonce lane exhausted")?;
             let (found,_)=gpu.search(nonce,block.header.target,o.batch,o.worksize)?;
             compute_seconds+=dispatch_start.elapsed().as_secs_f64();
             controls.after_dispatch(dispatch_start.elapsed());
-            nonce=nonce.wrapping_add(o.batch as u64);count+=o.batch as u64;
+            count+=o.batch as u64;
             for n in found {
                 let mut candidate=block.clone();candidate.header.nonce=n;
                 let digest=pow::hash_header(&candidate.pow_header());

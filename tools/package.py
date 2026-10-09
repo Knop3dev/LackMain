@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tarfile
 import zipfile
+import re
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -15,7 +16,8 @@ parser.add_argument('--helper', type=Path)
 parser.add_argument('--adlx-license', type=Path)
 parser.add_argument('--cargo', default='cargo')
 args = parser.parse_args()
-version = '0.2.0'
+package_section=(root / 'Cargo.toml').read_text(encoding='utf-8').split('[package]',1)[1].split('\n[',1)[0]
+version=re.search(r'(?m)^version\s*=\s*"([^"]+)"',package_section).group(1)
 output = root / 'dist'
 output.mkdir(exist_ok=True)
 stage = output / f'lackminer-qbtc-{version}-{args.platform}-x86_64'

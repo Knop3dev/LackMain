@@ -6,6 +6,7 @@
 /stats.json
 /miner-config.*
 /miner.conf
+/_hive/
 *.log
 *.jsonl
 *.obj

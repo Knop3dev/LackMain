@@ -2,11 +2,25 @@
 use super::{get_template, decode32};
 use crate::{pow,hex};
 use serde_json::{json,Value};
+use serde::{Serialize,Deserialize};
+use std::{path::PathBuf,time::{SystemTime,UNIX_EPOCH}};
 use std::{sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
 
 #[derive(Default)]
 struct Observation { tip_height:u64, tip_hash:String, checked:Option<Instant>, error:Option<String> }
 pub struct ChainGuard { state:Arc<Mutex<Observation>> }
+#[derive(Serialize,Deserialize)]
+pub struct Snapshot {tip_height:u64,tip_hash:String,checked_at_ms:Option<u64>,error:Option<String>}
+fn epoch_ms()->u64 {SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64}
+fn restore(snapshot:Snapshot,now:u64)->Observation {
+    let mut observation=Observation{tip_height:snapshot.tip_height,tip_hash:snapshot.tip_hash,checked:None,error:snapshot.error};
+    if let Some(checked)=snapshot.checked_at_ms {
+        if checked<=now && now-checked<=10_000 && decode32(&observation.tip_hash).is_ok(){
+            observation.checked=Instant::now().checked_sub(Duration::from_millis(now-checked));
+        }else{observation.error=Some("Shared chain observation is stale or invalid".into());}
+    }
+    observation
+}
 
 fn rejoin_ready(checks:&mut u8)->bool {
     if *checks==0 {true} else {*checks-=1;false}
@@ -36,6 +50,18 @@ fn observed_hash(block:&Value)->Result<String,String>{
     Ok(hex(&hash))
 }
 impl ChainGuard {
+    pub fn follow(path:PathBuf,stop:Arc<AtomicBool>)->Self {
+        let state=Arc::new(Mutex::new(Observation::default()));let worker=state.clone();
+        std::thread::spawn(move||{while !stop.load(Ordering::Relaxed){
+            let result=std::fs::read(&path).map_err(|e|e.to_string()).and_then(|b|serde_json::from_slice::<Snapshot>(&b).map_err(|e|e.to_string()));
+            *worker.lock().unwrap()=match result{Ok(s)=>restore(s,epoch_ms()),Err(e)=>Observation{error:Some(format!("Shared chain check unavailable: {e}")),..Default::default()}};
+            std::thread::sleep(Duration::from_millis(200));
+        }});Self{state}
+    }
+    pub fn snapshot(&self)->Snapshot {
+        let state=self.state.lock().unwrap();
+        Snapshot{tip_height:state.tip_height,tip_hash:state.tip_hash.clone(),checked_at_ms:state.checked.map(|t|epoch_ms().saturating_sub(t.elapsed().as_millis() as u64)),error:state.error.clone()}
+    }
     pub fn start(url:String,address:String,stop:Arc<AtomicBool>)->Self{
         let state=Arc::new(Mutex::new(Observation::default()));let worker=state.clone();
         std::thread::spawn(move||{
@@ -103,6 +129,17 @@ impl ChainGuard {
 }
 #[cfg(test)]
 mod tests {
+    #[test] fn shared_observation_preserves_age_and_rejects_stale_or_future_data(){
+        use super::*;
+        let fresh=restore(Snapshot{tip_height:42,tip_hash:"11".repeat(32),checked_at_ms:Some(9000),error:None},10000);
+        assert!(fresh.checked.unwrap().elapsed()>=Duration::from_secs(1));assert!(fresh.error.is_none());
+        for timestamp in [0,10002] {
+            let invalid=restore(Snapshot{tip_height:42,tip_hash:"11".repeat(32),checked_at_ms:Some(timestamp),error:None},10001);
+            assert!(invalid.checked.is_none());assert!(invalid.error.is_some());
+        }
+        let malformed=restore(Snapshot{tip_height:42,tip_hash:"invalid".into(),checked_at_ms:Some(9999),error:None},10000);
+        assert!(malformed.checked.is_none());
+    }
     use super::*;
     #[test]fn reorganization_requires_three_new_matching_observations(){
         let mut checks=3;

@@ -1,5 +1,6 @@
 use crate::opencl::DeviceIdentity;
 use serde::Serialize;
+#[path="nvidia.rs"] mod nvidia;
 use std::process::Command;
 #[cfg(target_os="linux")] use std::path::PathBuf;
 #[cfg(windows)]
@@ -14,6 +15,7 @@ enum Backend {
     #[cfg(windows)] Amd(amd_windows::Telemetry),
     #[cfg(target_os="linux")] Sysfs{device:PathBuf,hwmon:PathBuf},
     Nvidia(String),
+    Nvml(nvidia::Telemetry),
 }
 pub struct Telemetry{backend:Backend,pub name:String,pub power_kind:&'static str}
 fn number<T:std::str::FromStr>(s:&str)->Option<T>{s.trim().parse().ok()}
@@ -21,6 +23,7 @@ impl Telemetry {
     pub fn new(id:&DeviceIdentity)->Option<Self>{
         let pci=id.pci.as_deref()?;
         if id.vendor.contains("NVIDIA") {
+            if let Some(t)=nvidia::Telemetry::new(pci){return Some(Self{backend:Backend::Nvml(t),name:id.name.clone(),power_kind:"nvidia-board"});}
             return Some(Self{backend:Backend::Nvidia(pci.into()),name:id.name.clone(),power_kind:"nvidia-board"});
         }
         #[cfg(windows)] {
@@ -36,6 +39,7 @@ impl Telemetry {
         #[allow(unreachable_code)] None
     }
     pub fn read(&self)->Option<Reading>{match &self.backend {
+        Backend::Nvml(t)=>Some(t.read()),
         #[cfg(windows)] Backend::Amd(t)=>t.read(),
         #[cfg(target_os="linux")] Backend::Sysfs{device,hwmon}=>{
             let n=|file:&str|std::fs::read_to_string(hwmon.join(file)).ok().and_then(|s|number::<f64>(&s));
