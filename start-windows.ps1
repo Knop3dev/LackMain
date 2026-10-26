@@ -7,24 +7,50 @@ $NodeDir = Join-Path $Root 'node\official\v2.5.0'
 $NodeExe = Join-Path $NodeDir 'quantum-btc.exe'
 $NodeUrl = 'http://127.0.0.1:24002'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$Config = @{ user=''; device=0; max_power=120; intensity=100 }
+$Config = @{ user=''; device=0; max_power=120; intensity=100; mode='pool'; backend='gpu'; cpu_threads=2; pool='stratum+tcp://ashenward.ru:3334' }
 if (Test-Path -LiteralPath $ConfigPath) {
   $saved = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
-  foreach ($name in @('user','device','max_power','intensity')) {
+  foreach ($name in @('user','device','max_power','intensity','mode','backend','cpu_threads','pool')) {
     if ($null -ne $saved.$name) { $Config[$name] = $saved.$name }
   }
+}
+$answer = Read-Host "Mode: pool or solo [$($Config.mode)]"
+if ($answer) { $Config.mode = $answer.ToLowerInvariant() }
+if ($Config.mode -notin @('pool','solo')) { throw 'Choose pool or solo' }
+if ($Config.mode -eq 'pool') {
+  $answer = Read-Host "Backend: cpu or gpu [$($Config.backend)]"
+  if ($answer) { $Config.backend = $answer.ToLowerInvariant() }
+  if ($Config.backend -notin @('cpu','gpu')) { throw 'Choose cpu or gpu' }
 }
 $answer = Read-Host "Public Q-BTC payout address [$($Config.user)]"
 if ($answer) { $Config.user = $answer }
 & $Miner --validate-address --user $Config.user
 if ($LASTEXITCODE -ne 0) { throw 'Invalid Q-BTC address' }
-& $Miner --list-devices
-$answer = Read-Host "GPU index [$($Config.device)]"
-if ($answer) { $Config.device = [int]$answer }
-$answer = Read-Host "Measured ASIC power budget in W [$($Config.max_power)]"
-if ($answer) { $Config.max_power = [double]$answer }
-$answer = Read-Host "Intensity 1..100 [$($Config.intensity)]"
-if ($answer) { $Config.intensity = [int]$answer }
+if ($Config.mode -eq 'pool' -and $Config.backend -eq 'cpu') {
+  $answer = Read-Host "CPU threads [$($Config.cpu_threads)]"
+  if ($answer) { $Config.cpu_threads = [int]$answer }
+} else {
+  & $Miner --list-devices
+  $answer = Read-Host "GPU index [$($Config.device)]"
+  if ($answer) { $Config.device = [int]$answer }
+  $answer = Read-Host "Measured GPU power budget in W [$($Config.max_power)]"
+  if ($answer) { $Config.max_power = [double]$answer }
+  $answer = Read-Host "Intensity 1..100 [$($Config.intensity)]"
+  if ($answer) { $Config.intensity = [int]$answer }
+}
+if ($Config.mode -eq 'pool') {
+  $answer = Read-Host "Pool URL [$($Config.pool)]"
+  if ($answer) { $Config.pool = $answer }
+  Write-Host 'LackPool: 1.5% fee, proportional rewards, minimum payout 10 QBTC. No additional SOLO fee.'
+  if ((Read-Host 'Start pool mining? Type YES') -cne 'YES') { exit 0 }
+  $Config | ConvertTo-Json | Set-Content -LiteralPath $ConfigPath -Encoding utf8
+  $worker = $Config.user + '.' + $env:COMPUTERNAME
+  $arguments = @('--pool',$Config.pool,'--user',$worker,'--log-file',(Join-Path $Root 'miner.jsonl'),'--stats-file',(Join-Path $Root 'stats.json'))
+  if ($Config.backend -eq 'cpu') { $arguments += @('--cpu','--cpu-threads',[string]$Config.cpu_threads) }
+  else { $arguments += @('--device',[string]$Config.device,'--max-power',[string]$Config.max_power,'--intensity',[string]$Config.intensity) }
+  & $Miner @arguments
+  exit $LASTEXITCODE
+}
 Write-Host 'Fee: 10% of the entire coinbase (subsidy + transaction fees); 90% to your address.'
 if ((Read-Host 'Start SOLO mining? Type YES') -cne 'YES') { exit 0 }
 $Config | ConvertTo-Json | Set-Content -LiteralPath $ConfigPath -Encoding utf8

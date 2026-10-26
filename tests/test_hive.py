@@ -21,7 +21,9 @@ def option(name): return args[args.index(name)+1]
 watch='--chain-watch' in args
 record={'pid':os.getpid(),'role':'watch' if watch else 'gpu'}
 if not watch:
- record.update(device=int(option('--device')),lane=int(option('--nonce-lane')),lanes=int(option('--nonce-lanes')),base=option('--nonce-base'),wallet=option('--user'))
+ record.update(device=int(option('--device')),wallet=option('--user'))
+ if '--pool' in args:record['pool']=option('--pool')
+ else:record.update(lane=int(option('--nonce-lane')),lanes=int(option('--nonce-lanes')),base=option('--nonce-base'))
 with (root/'events.jsonl').open('a') as file:
  fcntl.flock(file,fcntl.LOCK_EX)
  file.write(json.dumps(record)+'\\n'); file.flush()
@@ -72,9 +74,9 @@ class HiveTests(unittest.TestCase):
     def shell(self,command,*args,**kwargs):
         return subprocess.run(['bash','-c','jq(){ "$LACKMINER_TEST_JQ" "$@"; }; export -f jq; '+command,'fixture',*map(str,args)],env=self.env,text=True,capture_output=True,**kwargs)
 
-    def start(self,extra=''):
+    def start(self,extra='',pool=''):
         if self.process and self.process.stderr: self.process.stderr.close()
-        (self.root/'miner.conf').write_text(self.wallet+'\n'+extra+'\n')
+        (self.root/'miner.conf').write_text(self.wallet+'\n'+extra+'\n'+pool+'\n')
         self.process=subprocess.Popen(['bash','-c','jq(){ "$LACKMINER_TEST_JQ" "$@"; }; export -f jq; exec bash "$1"','fixture',str(self.root/'h-run.sh')],env=self.env,start_new_session=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
 
     def events(self):
@@ -145,6 +147,17 @@ class HiveTests(unittest.TestCase):
             self.start('--devices '+selection)
             self.assertNotEqual(self.process.wait(timeout=5),0)
             self.assertFalse((self.root/'node-started').exists())
+
+    def test_pool_uses_all_selected_gpus_without_starting_a_node(self):
+        self.start('--devices 0,1,2',pool='stratum+tcp://ashenward.ru:3334')
+        self.await_condition(lambda:len([e for e in self.events() if e['role']=='gpu'])==3)
+        self.await_condition(lambda:all((self.root/'_hive'/f'gpu-{i}.json').exists() for i in range(3)))
+        self.assertFalse((self.root/'node-started').exists())
+        self.assertFalse(any(e['role']=='watch' for e in self.events()))
+        for event in self.events():
+            self.assertEqual(event['pool'],'stratum+tcp://ashenward.ru:3334')
+            self.assertEqual(event['wallet'],self.wallet+'.gpu'+str(event['device']))
+        _,stats=self.stats();self.assertEqual(len(stats['hs']),3)
 
     def test_stale_gpu_is_zero_without_hiding_other_cards(self):
         state=self.root/'_hive';state.mkdir()

@@ -5,6 +5,7 @@ cd "$ROOT"
 source h-manifest.conf
 mapfile -t config < "$CUSTOM_CONFIG_FILENAME"
 wallet="${config[0]:-}"
+pool="${config[2]:-}"
 ./lackminer-qbtc --validate-address --user "$wallet"
 read -r -a supplied <<< "${config[1]:-}"
 selection=all
@@ -80,16 +81,16 @@ cleanup(){
 }
 trap cleanup EXIT
 trap 'exit 0' INT TERM
-bash ./node-linux.sh 8>&-
+if [[ -z "$pool" ]]; then bash ./node-linux.sh 8>&-;fi
 next_node_check=$((SECONDS+15))
 for id in "${devices[@]}"; do
   pids[$id]=0; retry_at[$id]=0
   printf '{"accepted":0,"rejected":0,"stale":0}\n' > "$state_dir/history-$id.json"
   rm -f -- "$state_dir/gpu-$id.json"
 done
-echo "SOLO worker: $count GPUs, one local node, payout $wallet" >>"${CUSTOM_LOG_BASENAME}.log"
+if [[ -n "$pool" ]]; then echo "Pool worker: $count GPUs, endpoint $pool, payout $wallet" >>"${CUSTOM_LOG_BASENAME}.log";else echo "SOLO worker: $count GPUs, one local node, payout $wallet" >>"${CUSTOM_LOG_BASENAME}.log";fi
 while true; do
-  if (( SECONDS>=next_node_check )); then
+  if [[ -z "$pool" ]] && (( SECONDS>=next_node_check )); then
     if [[ "$node_watcher" == 0 ]] || ! kill -0 "$node_watcher" 2>/dev/null; then
       if [[ "$node_watcher" != 0 ]]; then wait "$node_watcher" || true; fi
       bash ./node-linux.sh >>"${CUSTOM_LOG_BASENAME}-node.log" 2>&1 8>&- &
@@ -97,7 +98,7 @@ while true; do
     fi
     next_node_check=$((SECONDS+15))
   fi
-  if [[ "$guardian" == 0 ]] || ! kill -0 "$guardian" 2>/dev/null; then
+  if [[ -z "$pool" ]] && { [[ "$guardian" == 0 ]] || ! kill -0 "$guardian" 2>/dev/null; }; then
     if [[ "$guardian" != 0 ]]; then wait "$guardian" || true; fi
     rm -f -- "$state_dir/chain.json"
     ./lackminer-qbtc --chain-watch --node http://127.0.0.1:24002 --user "$wallet" --chain-state "$state_dir/chain.json" >>"${CUSTOM_LOG_BASENAME}-chain.log" 2>&1 8>&- &
@@ -112,7 +113,12 @@ while true; do
       echo "GPU$id stopped; restarting in 10 seconds" >>"${CUSTOM_LOG_BASENAME}.log"
     fi
     if [[ "${pids[$id]}" == 0 && "$SECONDS" -ge "${retry_at[$id]}" ]]; then
-      ./lackminer-qbtc --solo --node http://127.0.0.1:24002 --user "$wallet" --device "$id" --nonce-base "$seed" --nonce-lane "$lane" --nonce-lanes "$count" --chain-state "$state_dir/chain.json" --stats-file "$state_dir/gpu-$id.json" --log-file "${CUSTOM_LOG_BASENAME}-gpu$id.jsonl" "${options[@]}" >>"${CUSTOM_LOG_BASENAME}-gpu$id.log" 2>&1 8>&- &
+      if [[ -n "$pool" ]]; then
+        mode_args=(--pool "$pool" --user "$wallet.gpu$id")
+      else
+        mode_args=(--solo --node http://127.0.0.1:24002 --user "$wallet" --nonce-base "$seed" --nonce-lane "$lane" --nonce-lanes "$count" --chain-state "$state_dir/chain.json")
+      fi
+      ./lackminer-qbtc "${mode_args[@]}" --device "$id" --stats-file "$state_dir/gpu-$id.json" --log-file "${CUSTOM_LOG_BASENAME}-gpu$id.jsonl" "${options[@]}" >>"${CUSTOM_LOG_BASENAME}-gpu$id.log" 2>&1 8>&- &
       pids[$id]=$!
     fi
   done

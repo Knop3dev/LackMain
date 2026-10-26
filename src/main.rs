@@ -4,6 +4,7 @@ mod gpu_control;
 mod solo;
 mod pow;
 mod nonce;
+mod stratum;
 use std::time::{Duration, Instant};
 use std::sync::{Arc, Barrier};
 use serde_json::json;
@@ -20,6 +21,7 @@ pub struct Options {
     pub core_clock:Option<u32>,pub memory_clock:Option<u32>,pub fan:Option<u8>,pub intensity:u8,
     pub max_temp:Option<i32>,pub max_hotspot:Option<i32>,pub stats_file:Option<String>,
     pub nonce_base:Option<u64>,pub nonce_lane:usize,pub nonce_lanes:usize,pub chain_state:Option<String>,
+    pub cpu:bool,
 }
 fn options()->Result<(Options,String),String>{
     let total=std::thread::available_parallelism().map(|n|n.get()).unwrap_or(1);
@@ -27,12 +29,13 @@ fn options()->Result<(Options,String),String>{
         unroll:true,pool:String::new(),user:String::new(),debug:false,log:None,stop_accepted:0,mine_seconds:0,
         node:"http://127.0.0.1:24002".into(),min_height:23214,
         max_power:None,power_limit:None,power_percent:None,core_clock:None,memory_clock:None,fan:None,intensity:100,
-        max_temp:None,max_hotspot:None,stats_file:None,nonce_base:None,nonce_lane:0,nonce_lanes:1,chain_state:None};
+        max_temp:None,max_hotspot:None,stats_file:None,nonce_base:None,nonce_lane:0,nonce_lanes:1,chain_state:None,cpu:false};
     let mut mode="solo".to_string();let mut args=std::env::args().skip(1);
     while let Some(a)=args.next(){match a.as_str(){
         "--benchmark"=>mode="benchmark".into(),"--gpu-benchmark"=>mode="gpu-benchmark".into(),"--tune"=>mode="tune".into(),"--self-test"=>mode="test".into(),
         "--list-devices"=>mode="list".into(),"--list-devices-json"=>mode="list-json".into(),"--chain-watch"=>mode="chain-watch".into(),"--help"|"-h"=>mode="help".into(),"--debug"=>o.debug=true,
         "--solo"=>mode="solo".into(),"--validate-address"=>mode="validate-address".into(),
+        "--cpu"=>o.cpu=true,
         _=>{let v=args.next().ok_or(format!("Missing value for {a}"))?;match a.as_str(){
             "--device"=>o.device=v.parse().map_err(|_|"Bad device")?,
             "--worksize"=>o.worksize=v.parse().map_err(|_|"Bad worksize")?,
@@ -54,7 +57,7 @@ fn options()->Result<(Options,String),String>{
             "--nonce-base"=>o.nonce_base=Some(v.parse().map_err(|_|"Bad nonce-base")?),
             "--nonce-lane"=>o.nonce_lane=v.parse().map_err(|_|"Bad nonce-lane")?,
             "--nonce-lanes"=>o.nonce_lanes=v.parse().map_err(|_|"Bad nonce-lanes")?,
-            "--pool"=>return Err("Q-BTC pool support removed; use --solo --node http://127.0.0.1:24002".into()),"--user"=>o.user=v,"--log-file"=>o.log=Some(v),
+            "--pool"=>{o.pool=v;mode="pool".into();},"--password"=>{if v!="x"{return Err("Pool password must be x".into());}},"--user"=>o.user=v,"--log-file"=>o.log=Some(v),
             "--stop-after-accepted"=>o.stop_accepted=v.parse().map_err(|_|"Bad acceptance limit")?,
             "--mine-seconds"=>o.mine_seconds=v.parse().map_err(|_|"Bad runtime")?,
             "--node"=>o.node=v,"--min-height"=>o.min_height=v.parse().map_err(|_|"Bad minimum height")?,
@@ -67,6 +70,8 @@ fn options()->Result<(Options,String),String>{
     if o.nonce_lanes==0||o.nonce_lanes>256||o.nonce_lane>=o.nonce_lanes{return Err("Invalid nonce lane assignment".into());}
     if o.nonce_lanes>1&&o.nonce_base.is_none(){return Err("Multi-GPU nonce lanes require a common --nonce-base".into());}
     if !(1..=100).contains(&o.intensity)||o.fan.is_some_and(|v|v>100)||o.max_power.is_some_and(|v|!v.is_finite()||v<=0.)||o.power_limit.is_some_and(|v|!v.is_finite()||v<=0.)||o.max_temp.is_some_and(|v|!(40..=100).contains(&v))||o.max_hotspot.is_some_and(|v|!(40..=105).contains(&v)) {return Err("Invalid GPU limits".into());}
+    if o.cpu&&mode=="solo"{return Err("Use --cpu with --pool for CPU mining".into());}
+    if o.cpu&&mode=="benchmark"{mode="cpu-benchmark".into();}
     Ok((o,mode))
 }
 pub fn hex(bytes:&[u8])->String{bytes.iter().map(|b|format!("{b:02x}")).collect()}
@@ -135,12 +140,28 @@ fn gpu_bench(gpu:&opencl::Gpu,o:&Options)->Result<serde_json::Value,String>{
         "telemetry_gpu":telemetry.as_ref().map(|t|&t.name),"telemetry_samples":samples}))
 }
 fn run()->Result<(),String>{
+    if std::env::args().any(|arg|arg=="--help"||arg=="-h"){
+        println!("Pool GPU: --pool stratum+tcp://ashenward.ru:3334 --user QBTC_ADDRESS.worker --device 0\nPool CPU: --pool stratum+tcp://ashenward.ru:3334 --user QBTC_ADDRESS.worker --cpu --cpu-threads N\nPool fee: 1.5%; minimum payout: 10 QBTC. The SOLO fee does not apply to pool mining.");
+    }
     ctrlc::set_handler(||SIGNAL_STOP.store(true,std::sync::atomic::Ordering::Relaxed)).map_err(|e|e.to_string())?;
     let(o,mode)=options()?;if mode=="help"{println!("lackminer-qbtc --list-devices | --self-test | --benchmark | --tune\n--device 0 --worksize 128 --batch 16777216 --unroll 1 --seconds 10 --cpu-threads N\n--solo --node http://127.0.0.1:24002 --user QBTC_ADDRESS --debug --log-file PATH\n--stop-after-accepted N --mine-seconds N\n--max-power W --power-limit W --power-percent P --core-clock MHZ --memory-clock MHZ\n--fan PERCENT --intensity 1..100 --max-temp C --max-hotspot C --stats-file PATH");return Ok(());}
     if mode=="validate-address"{solo::validate_address(&o.user)?;println!("Q-BTC payout address valid");return Ok(());}
     if mode=="list"{return opencl::list();}
     if mode=="list-json"{return opencl::list_json();}
     if mode=="chain-watch"{return solo::watch_chain(&o);}
+    if mode=="cpu-benchmark"{let(rate,count)=cpu_bench(o.seconds,o.threads);println!("CPU: {:.3} MH/s | {} threads | {} hashes",rate/1e6,o.threads,count);return Ok(());}
+    if mode=="pool"{
+        solo::validate_address(o.user.split('.').next().unwrap_or(""))?;
+        let runtime=tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|e|e.to_string())?;
+        loop {
+            let result=runtime.block_on(stratum::mine(o.clone()));
+            if interrupted()||result.is_ok()||o.mine_seconds>0||o.stop_accepted>0{return result;}
+            let error=result.unwrap_err();
+            if error.contains("CPU verification failed"){return Err(error);}
+            eprintln!("Pool connection: {error}; retrying in 10 seconds");
+            for _ in 0..100{if interrupted(){return Ok(());}std::thread::sleep(Duration::from_millis(100));}
+        }
+    }
     if mode=="tune"{
         let mut rows=Vec::new();for unroll in [false,true]{let gpu=opencl::Gpu::new(o.device,unroll)?;
             for wg in [64,128,256]{let mut trial=o.clone();trial.worksize=wg;trial.unroll=unroll;

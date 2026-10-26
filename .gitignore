@@ -11,3 +11,12 @@
 *.jsonl
 *.obj
 *.exe
+.git-credentials
+__pycache__/
+*.pyc
+*.sqlite3*
+private-audit/
+scripts/build-helper-local.cmd
+pool/config.json
+pool/secrets/
+pool/keystores/
