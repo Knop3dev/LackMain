@@ -9,6 +9,7 @@ class AccountingTests(unittest.TestCase):
 
     def ledger(self):
         ledger=Ledger(':memory:')
+        self.addCleanup(ledger.db.close)
         ledger.share('a','worker-a','gpu0',1,1,(1<<31)-1)
         ledger.share('b','worker-b','gpu0',1,2,(1<<32)-1)
         ledger.found('block',100,50*SAT,{'success':True})
@@ -46,6 +47,7 @@ class AccountingTests(unittest.TestCase):
 
     def test_duplicate_work_is_not_paid_twice(self):
         ledger=Ledger(':memory:')
+        self.addCleanup(ledger.db.close)
         self.assertIsNotNone(ledger.share('digest','a','w',1,2,100))
         self.assertIsNone(ledger.share('digest','b','w',2,2,100))
 

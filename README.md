@@ -31,7 +31,7 @@ On Windows use `lackminer-qbtc.exe`; on Linux use `./lackminer-qbtc`. `--passwor
 
 LackPool charges **1.5%** of each block reward, including transaction fees. There is **no additional 10% miner fee in pool mode**.
 
-The pool uses PROP: each round's distributable reward is divided by accepted work, weighted by share difficulty. CPU miners receive easier shares; their shares do not count as equal work to harder GPU shares. Each round ends when the pool finds a block.
+The pool uses **PPLNS**. Each block's distributable reward is divided over the latest accepted work, with a window equal to twice the expected work for a network block at that block's difficulty. Shares are weighted by difficulty; the oldest boundary share is counted partially. CPU miners receive easier shares with proportionally less weight. Blocks do not reset the window. During initial filling, the available work receives the full distributable reward. Your remaining work can earn rewards after disconnecting until newer work replaces it.
 
 Rewards become spendable only after at least 100 blocks of coinbase maturity and canonical-chain verification. Automatic payouts start at **10 Q-BTC**. The operator pays network transaction fees from the pool fee reserve. Payouts may wait for sufficient fee reserve or confirmations. Orphaned blocks do not create spendable balances. Shares alone do not guarantee a reward.
 
@@ -99,7 +99,9 @@ CPU:
 lackminer-qbtc --pool stratum+tcp://ashenward.ru:3334 --user YOUR_QBTC_ADDRESS.cpu --cpu --cpu-threads 4
 ```
 
-Комиссия пула — **1,5%**, дополнительных 10% в pool-режиме нет. Награда распределяется пропорционально подтверждённой работе с учётом сложности шар. Начисления становятся доступными после созревания награды и проверки основной цепи. Выплата — **от 10 Q-BTC** на адрес майнера; комиссию транзакции оплачивает оператор из резерва комиссии пула.
+Схема — **PPLNS**: учитывается последняя работа в окне 2× ожидаемой работы на блок при его сложности. Вес шары зависит от сложности, граничная шара учитывается частично. После блока окно не сбрасывается; при первоначальном заполнении награда делится по имеющейся работе.
+
+Комиссия пула — **1,5%**, дополнительных 10% в pool-режиме нет. Начисления становятся доступными после созревания награды и проверки основной цепи. Выплата — **от 10 Q-BTC** на адрес майнера; комиссию транзакции оплачивает оператор из резерва комиссии пула.
 
 Для Hive OS укажите архив из таблицы выше, свой адрес в Wallet template и `stratum+tcp://ashenward.ru:3334` в Pool URL. Extra config: `--devices all --max-power 170`. Поддерживаются несколько GPU в одном воркере и смешанные AMD/NVIDIA.
 

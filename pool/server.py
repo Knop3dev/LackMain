@@ -19,6 +19,7 @@ class Pool:
     def __init__(self,config):
         self.config=config
         self.ledger=Ledger(config['database'],config.get('fee_bps',150),config.get('min_payout_sats',10*SAT))
+        self.ledger.configure_policy(config.get('payout_scheme','PROP'),config.get('pplns_start_share',0))
         self.owner=config.get('owner',OWNER);self.owner_hash=address_hash(self.owner)
         self.node=config['node'];self.public=config.get('public','https://explorer.qbtc-core.org')
         self.template=None;self.anchor=None;self.ready=False;self.reason='Node synchronizing'
@@ -57,6 +58,9 @@ class Pool:
                 canonical=await self.call(self.public,'get_block',{'height':public_height})
                 if block_digest(canonical)!=template['previous_hash']:
                     raise ValueError('Local/public chain hashes differ')
+                if await self.replay_candidate(template):
+                    self.ready=False;self.reason='Relaying a saved block candidate'
+                    await self.pause_all(self.reason);await asyncio.sleep(2);continue
                 coinbase=template['transactions'][0]
                 if any(bytes(o['public_key_hash'])!=self.owner_hash for o in coinbase['outputs']):
                     raise ValueError('Unexpected coinbase payout address')
@@ -83,6 +87,24 @@ class Pool:
                 await self.pause_all(self.reason)
                 LOG.warning('Mining paused: %s',self.reason)
             await asyncio.sleep(2)
+
+    async def replay_candidate(self,template):
+        rows=self.ledger.db.execute("SELECT hash,node_response FROM blocks WHERE height=? AND state='pending' ORDER BY created",(template['current_height'],)).fetchall()
+        for row in rows:
+            saved=json.loads(row['node_response']);candidate=saved.get('block')
+            if not candidate:continue
+            if block_digest(candidate)!=row['hash']:raise ValueError('Saved block candidate was altered')
+            if bytes(candidate['header']['previous_hash']).hex()!=template['previous_hash']:continue
+            receipt=await self.call(self.node,'submit_block',{'block':candidate})
+            self.ledger.db.execute('UPDATE blocks SET node_response=? WHERE hash=?',(json.dumps({'receipt':receipt,'block':candidate}),row['hash']))
+            if receipt.get('success'):
+                try:await self.call(self.public,'submit_block',{'block':candidate})
+                except Exception:LOG.warning('Saved block public relay pending')
+                return True
+            current=await self.call(self.node,'get_block',{'height':template['current_height']})
+            if current and block_digest(current)==row['hash']:return True
+            self.ledger.observe(row['hash'],'not-canonical',template['current_height'])
+        return False
 
     async def mature(self,tip):
         pending=self.ledger.db.execute("SELECT hash,height,state FROM blocks WHERE state='pending' AND height<=? ORDER BY height LIMIT 12",(tip,)).fetchall()
@@ -131,14 +153,14 @@ class Pool:
         block=copy.deepcopy(job['block']);block['header']['nonce']=nonce
         digest=block_digest(block);hash_num=int(digest[:16],16)
         if hash_num>job['target']:raise ValueError('Low difficulty share')
-        share_id=self.ledger.share(digest,session['address'],session['worker'],job_id,nonce,job['target'])
+        share_id=self.ledger.share(digest,session['address'],session['worker'],job_id,nonce,job['target'],header_bytes(block['header']).hex(),job['height'])
         if share_id is None:raise ValueError('Duplicate share')
         session['accepted']+=1;session['last_share']=time.time()
         if hash_num<=block['header']['target']:
             async with self.block_lock:
                 self.ready=False;self.reason='Checking found block in the public chain'
                 reward=sum(output['value'] for output in block['transactions'][0]['outputs'])
-                self.ledger.found(digest,job['height'],reward,{'state':'submitting','block':block})
+                self.ledger.found(digest,job['height'],reward,{'state':'submitting','block':block},block['header']['target'])
                 await self.pause_all(self.reason)
                 try:receipt=await self.call(self.node,'submit_block',{'block':block})
                 except Exception:
@@ -179,10 +201,11 @@ class Pool:
                 if not isinstance(request,dict):raise ValueError('Expected a JSON-RPC object')
                 request_id=request.get('id');method=request.get('method');params=request.get('params',[])
                 try:
+                    if not isinstance(params,list) or len(params)>8:raise ValueError('Expected a parameter array')
                     if method=='mining.subscribe':
                         if len(params)>1 and isinstance(params[1],dict) and params[1].get('device')=='cpu':
                             session['share_target']=(1<<40)-1
-                        result={'protocol':'lackpool/1','pool':'LackPool','fee_percent':1.5,'payout':'PROP','minimum_payout_qbtc':10,'payout_address':self.owner}
+                        result={'protocol':'lackpool/1','pool':'LackPool','fee_percent':1.5,'payout':self.ledger.scheme,'minimum_payout_qbtc':10,'payout_address':self.owner}
                     elif method=='mining.authorize':
                         if not params or not isinstance(params[0],str) or len(params[0])>160:raise ValueError('Invalid worker')
                         address,_,worker=params[0].partition('.')
@@ -205,6 +228,7 @@ class Pool:
         except Exception:
             LOG.exception('Miner session failed')
         finally:
+            for job_id in session.get('jobs',[]):self.jobs.pop(job_id,None)
             self.sessions.pop(tag,None);writer.close()
             try:await writer.wait_closed()
             except OSError:pass
@@ -213,7 +237,7 @@ class Pool:
         now=time.time();window=600
         work=self.ledger.db.execute('SELECT COALESCE(SUM(work),0),COUNT(*) FROM shares WHERE created>=?',(now-600,)).fetchone()
         value=self.ledger.summary(address)
-        value.update({'name':'LackPool Q-BTC','algorithm':'SHA-256 / Q-BTC 120-byte header','payout_scheme':'PROP',
+        value.update({'name':'LackPool Q-BTC','algorithm':'SHA-256 / Q-BTC 120-byte header','payout_scheme':self.ledger.scheme,
                       'mining_address':self.owner,'stratum':'stratum+tcp://ashenward.ru:3334',
                       'state':'mining' if self.ready else 'syncing','reason':self.reason,
                       'height':self.template['current_height']-1 if self.template else None,
@@ -221,6 +245,13 @@ class Pool:
                       'hashrate_estimate':work[0]/window,'hashrate_method':'accepted-share work over a rolling 10-minute window',
                       'accepted_shares_10m':work[1],'rejected_shares':sum(self.rejected.values()),
                       'payout_signer':self.signer_status(),'updated_at':int(now)})
+        if self.ledger.scheme=='PPLNS' and self.template:
+            cutoff=self.ledger.db.execute('SELECT COALESCE(MAX(id),0) FROM shares').fetchone()[0]
+            window=2*max(1,(1<<64)//(self.template['target']+1))
+            weights,first,used=self.ledger.window_weights(cutoff,window)
+            value['pplns']={'window_work':str(window),'filled_work':str(used),'fill_percent':100*used/window,
+                            'first_share':first if weights else None,'last_share':cutoff,'network_difficulty_multiple':2,
+                            'participants':len(weights),'my_percent':100*weights.get(address,0)/used if used else 0}
         if address:
             individual=self.ledger.db.execute('SELECT COALESCE(SUM(work),0),COUNT(*) FROM shares WHERE address=? AND created>=?',(address,now-600)).fetchone()
             value.update(address=address,miner_hashrate_estimate=individual[0]/window,miner_shares_10m=individual[1],
@@ -253,17 +284,26 @@ class Pool:
                 body=(pathlib.Path(__file__).parent/'web'/name).read_bytes()
                 content_type={'index.html':'text/html; charset=utf-8','app.js':'text/javascript; charset=utf-8','style.css':'text/css; charset=utf-8'}[name]
             else:status='404 Not Found';body=b'{"error":"Not found"}'
-            writer.write(f'HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {len(body)}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n'.encode()+body)
-            await writer.drain()
+            await self.http_response(writer,status,content_type,body)
+        except (ValueError,UnicodeError,asyncio.TimeoutError,asyncio.LimitOverrunError,asyncio.IncompleteReadError):
+            try:await self.http_response(writer,'400 Bad Request','application/json',b'{"error":"Invalid request or Q-BTC address"}')
+            except OSError:pass
+        except OSError:pass
         except Exception:
-            pass
+            LOG.exception('Pool HTTP request failed')
+            try:await self.http_response(writer,'500 Internal Server Error','application/json',b'{"error":"Statistics temporarily unavailable"}')
+            except OSError:pass
         finally:writer.close()
+
+    async def http_response(self,writer,status,content_type,body):
+        writer.write(f"HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {len(body)}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'\r\nConnection: close\r\n\r\n".encode()+body)
+        await asyncio.wait_for(writer.drain(),10)
 
 async def main(config):
     pool=Pool(config)
     stratum=await asyncio.start_server(pool.miner,config.get('stratum_host','0.0.0.0'),config.get('stratum_port',3334),limit=8193)
     http=await asyncio.start_server(pool.http,'127.0.0.1',config.get('http_port',3335),limit=16385)
-    LOG.info('Stratum online; fee 1.5%%; PROP; payout threshold 10 QBTC')
+    LOG.info('Stratum online; fee 1.5%%; %s; payout threshold 10 QBTC',pool.ledger.scheme)
     async with stratum,http:
         await asyncio.gather(stratum.serve_forever(),http.serve_forever(),pool.refresh())
 

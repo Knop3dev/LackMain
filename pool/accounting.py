@@ -17,20 +17,50 @@ class Ledger:
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS shares(id INTEGER PRIMARY KEY,digest TEXT UNIQUE NOT NULL,address TEXT NOT NULL,worker TEXT NOT NULL,job INTEGER NOT NULL,nonce TEXT NOT NULL,work INTEGER NOT NULL,created REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS shares_created ON shares(created);
+CREATE INDEX IF NOT EXISTS shares_address_created ON shares(address,created);
 CREATE TABLE IF NOT EXISTS blocks(hash TEXT PRIMARY KEY,height INTEGER NOT NULL,reward INTEGER NOT NULL,fee INTEGER NOT NULL,cutoff INTEGER NOT NULL,round_start INTEGER NOT NULL,state TEXT NOT NULL,allocations TEXT NOT NULL,node_response TEXT NOT NULL,created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS balances(address TEXT PRIMARY KEY,available INTEGER NOT NULL DEFAULT 0,paid INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS payouts(id TEXT PRIMARY KEY,address TEXT NOT NULL,amount INTEGER NOT NULL,state TEXT NOT NULL,txid TEXT UNIQUE,error TEXT,created REAL NOT NULL,updated REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS payouts_address ON payouts(address,created);
 ''')
         self.db.execute('INSERT OR IGNORE INTO meta VALUES (?,?)',('round_start','0'))
         self.db.execute('INSERT OR IGNORE INTO meta VALUES (?,?)',('start_height',str(start_height)))
+        self.db.executescript('''
+CREATE TABLE IF NOT EXISTS share_proofs(share_id INTEGER PRIMARY KEY,header TEXT NOT NULL,target TEXT NOT NULL,height INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS block_policy(hash TEXT PRIMARY KEY,scheme TEXT NOT NULL,start_share INTEGER NOT NULL,window_work TEXT NOT NULL,network_target TEXT NOT NULL);
+''')
+        self.scheme='PROP';self.policy_start=0;self.window_multiple=2
 
-    def share(self,digest,address,worker,job,nonce,target):
+    def configure_policy(self,scheme='PROP',start_share=0,multiple=2):
+        if scheme not in ('PROP','PPLNS') or type(start_share) is not int or start_share<0 or multiple!=2:
+            raise ValueError('Invalid payout policy')
+        self.scheme=scheme;self.policy_start=start_share;self.window_multiple=multiple
+
+    def window_weights(self,cutoff,window,start_share=None):
+        if type(window) is not int or window<=0:raise ValueError('Invalid PPLNS window')
+        start=self.policy_start if start_share is None else start_share
+        remaining=window;weights={};first=cutoff
+        for row in self.db.execute('SELECT id,address,work FROM shares WHERE id>? AND id<=? ORDER BY id DESC',(start,cutoff)):
+            used=min(remaining,row['work'])
+            if used<=0:raise ValueError('Invalid share weight')
+            weights[row['address']]=weights.get(row['address'],0)+used
+            remaining-=used;first=row['id']
+            if not remaining:break
+        return weights,first,window-remaining
+
+    def share(self,digest,address,worker,job,nonce,target,header=None,height=0):
         work=max(1,(1<<64)//(target+1))
+        self.db.execute('BEGIN IMMEDIATE')
         try:
             cursor=self.db.execute('INSERT INTO shares(digest,address,worker,job,nonce,work,created) VALUES (?,?,?,?,?,?,?)',(digest,address,worker,job,str(nonce),work,time.time()))
+            if header is not None:self.db.execute('INSERT INTO share_proofs VALUES (?,?,?,?)',(cursor.lastrowid,header,str(target),height))
+            self.db.execute('COMMIT')
             return cursor.lastrowid
         except sqlite3.IntegrityError:
+            self.db.execute('ROLLBACK')
             return None
+        except Exception:
+            self.db.execute('ROLLBACK');raise
 
     @staticmethod
     def split(amount,weights):
@@ -42,17 +72,25 @@ CREATE TABLE IF NOT EXISTS payouts(id TEXT PRIMARY KEY,address TEXT NOT NULL,amo
         for address in ranking[:remainder]:values[address]+=1
         return values
 
-    def found(self,digest,height,reward,response):
+    def found(self,digest,height,reward,response,network_target=None):
         self.db.execute('BEGIN IMMEDIATE')
         try:
             if self.db.execute('SELECT 1 FROM blocks WHERE hash=?',(digest,)).fetchone():
                 self.db.execute('ROLLBACK');return False
             start=int(self.db.execute("SELECT value FROM meta WHERE key='round_start'").fetchone()[0])
             cutoff=self.db.execute('SELECT COALESCE(MAX(id),0) FROM shares').fetchone()[0]
-            weights={row['address']:row['work'] for row in self.db.execute('SELECT address,SUM(work) work FROM shares WHERE id>? AND id<=? GROUP BY address',(start,cutoff))}
+            window=0
+            if self.scheme=='PPLNS':
+                if type(network_target) is not int or not 0<=network_target<(1<<64):raise ValueError('Missing network target')
+                window=self.window_multiple*max(1,(1<<64)//(network_target+1))
+                weights,first,_=self.window_weights(cutoff,window)
+                start=first-1
+            else:
+                weights={row['address']:row['work'] for row in self.db.execute('SELECT address,SUM(work) work FROM shares WHERE id>? AND id<=? GROUP BY address',(start,cutoff))}
             fee=reward*self.fee_bps//10000
             allocations=self.split(reward-fee,weights)
             self.db.execute('INSERT INTO blocks VALUES (?,?,?,?,?,?,?,?,?,?)',(digest,height,reward,fee,cutoff,start,'pending',json.dumps(allocations,sort_keys=True),json.dumps(response),time.time()))
+            self.db.execute('INSERT INTO block_policy VALUES (?,?,?,?,?)',(digest,self.scheme,self.policy_start,str(window),str(network_target or 0)))
             self.db.execute("UPDATE meta SET value=? WHERE key='round_start'",(str(cutoff),))
             self.db.execute('COMMIT');return True
         except Exception:
@@ -117,6 +155,8 @@ CREATE TABLE IF NOT EXISTS payouts(id TEXT PRIMARY KEY,address TEXT NOT NULL,amo
         if address:
             row=self.db.execute('SELECT * FROM balances WHERE address=?',(address,)).fetchone()
             result['available_sats']=row['available'] if row else 0
+            result['paid_sats']=row['paid'] if row else 0
+            result['in_flight_sats']=self.db.execute("SELECT COALESCE(SUM(amount),0) FROM payouts WHERE address=? AND state NOT IN ('confirmed','retained')",(address,)).fetchone()[0]
             result['pending_sats']=sum(json.loads(row['allocations']).get(address,0) for row in self.db.execute("SELECT allocations FROM blocks WHERE state='pending'"))
             result['payouts']=[dict(row) for row in self.db.execute('SELECT id,amount,state,txid,created FROM payouts WHERE address=? ORDER BY created DESC LIMIT 30',(address,))]
         return result
