@@ -1,0 +1,21 @@
+name: Publish lackminer qbtc
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          gh run view 40731701793 --json conclusion,headSha --jq '.conclusion + " " + .headSha' | python3 -c 'import sys; assert sys.stdin.read().strip()=="success c4ecb979b0964d544a3f29014e9e1f73343bd774"'
+          gh release view v0.3.1 --json isDraft --jq .isDraft | python3 -c 'import sys; assert sys.stdin.read().strip()=="true"'
+          gh run download 40731701793 --dir artifacts
+          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} . \;
+          sha256sum lackminer-qbtc-0.3.1-*.zip lackminer-qbtc-0.3.1-hiveos.tar.gz > SHA256SUMS.txt
+          gh release upload v0.3.1 lackminer-qbtc-0.3.1-windows-x86_64.zip lackminer-qbtc-0.3.1-linux-x86_64.zip lackminer-qbtc-0.3.1-hiveos.tar.gz SHA256SUMS.txt --clobber
+          gh release edit v0.3.1 --draft=false --latest
