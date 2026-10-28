@@ -20,7 +20,7 @@ if [[ -f "$state_dir/gpus.json" ]]; then
   if [[ ${#rows[@]} -gt 0 ]]; then
     now=$(date +%s)
     stats=$(printf '%s\n' "${rows[@]}" | jq -sc --slurpfile gpu "$state_dir/gpus.json" --argjson uptime "$((now-started))" '
-      {hs:map(.hashrate),hs_units:"hs",temp:map(.temperature),fan:map(.fan),power:map(.power),uptime:$uptime,ver:"0.3.0",ar:[(map(.accepted)|add),(map(.rejected)|add)],stale:(map(.stale)|add),algo:"qbtc",bus_numbers:($gpu[0]|map(.bus))}')
+      {hs:map(.hashrate),hs_units:"hs",temp:map(.temperature),fan:map(.fan),power:map(.power),uptime:$uptime,ver:"0.3.1",ar:[(map(.accepted)|add),(map(.rejected)|add)],stale:(map(.stale)|add),algo:"qbtc",bus_numbers:($gpu[0]|map(.bus))}')
     khs=$(jq -r '(.hs|add)/1000' <<< "$stats")
   fi
 fi

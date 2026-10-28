@@ -1,7 +1,27 @@
 use crate::{hex,opencl::Gpu,pow,Options};
 use serde_json::{json,Value};
 use std::{collections::HashMap,fs::File,io::Write,sync::{Arc,RwLock,atomic::{AtomicBool,AtomicU64,Ordering}},time::{Duration,Instant}};
-use tokio::{io::{AsyncBufReadExt,AsyncWriteExt,BufReader},net::TcpStream};
+use tokio::{io::{AsyncBufReadExt,AsyncWriteExt,AsyncRead,AsyncWrite,BufReader},net::TcpStream};
+use tokio_rustls::{TlsConnector,rustls::{ClientConfig,RootCertStore,pki_types::ServerName}};
+
+trait PoolStream:AsyncRead+AsyncWrite+Unpin+Send{}
+impl<T:AsyncRead+AsyncWrite+Unpin+Send> PoolStream for T{}
+
+fn endpoint(value:&str)->Result<(String,u16,bool),String>{
+    let (rest,tls)=if let Some(rest)=value.strip_prefix("stratum+ssl://"){(rest,true)}
+        else if let Some(rest)=value.strip_prefix("stratum+tcp://"){(rest,false)}
+        else{return Err("Use stratum+ssl://HOST:PORT".into());};
+    let parsed=reqwest::Url::parse(&format!("https://{rest}")).map_err(|_|"Invalid pool URL")?;
+    if !parsed.username().is_empty()||parsed.password().is_some()||parsed.query().is_some()||parsed.fragment().is_some()||parsed.path()!="/"{
+        return Err("Pool URL must contain only host and port".into());
+    }
+    let host=parsed.host_str().ok_or("Missing pool host")?.trim_matches(['[',']']).to_string();
+    let port=parsed.port_or_known_default().ok_or("Missing pool port")?;
+    if !tls&&!matches!(host.as_str(),"localhost"|"127.0.0.1"|"::1"){
+        return Err("Unencrypted remote pools are disabled; use stratum+ssl://HOST:PORT (LackPool: ashenward.ru:3336)".into());
+    }
+    Ok((host,port,tls))
+}
 
 #[derive(Clone)]
 struct Job{job_id:u64,target:u64,header:[u8;120],version:u64,range:Option<(u64,u64)>}
@@ -50,7 +70,7 @@ fn cpu_worker(o:&Options,current:Arc<RwLock<Option<Job>>>,running:Arc<AtomicBool
     for handle in handles{handle.join().map_err(|_|"CPU mining worker failed")?;}
     Ok(())
 }
-async fn read_line_limited(reader:&mut BufReader<tokio::net::tcp::OwnedReadHalf>,line:&mut String)->Result<usize,String>{
+async fn read_line_limited<R:AsyncRead+Unpin>(reader:&mut BufReader<R>,line:&mut String)->Result<usize,String>{
     let mut length=0;
     loop {
         let data=reader.fill_buf().await.map_err(|e|e.to_string())?;
@@ -63,14 +83,21 @@ async fn read_line_limited(reader:&mut BufReader<tokio::net::tcp::OwnedReadHalf>
     }
 }
 pub async fn mine(o:Options)->Result<(),String>{
-    let endpoint=o.pool.strip_prefix("stratum+tcp://").unwrap_or(&o.pool);
-    if endpoint.contains('/') {return Err("Pool must be HOST:PORT or stratum+tcp://HOST:PORT".into());}
-    let stream=tokio::time::timeout(Duration::from_secs(15),TcpStream::connect(endpoint)).await.map_err(|_|"Pool connect timed out")?.map_err(|e|e.to_string())?;
+    let(host,port,tls)=endpoint(&o.pool)?;
+    let stream=tokio::time::timeout(Duration::from_secs(15),TcpStream::connect((host.as_str(),port))).await.map_err(|_|"Pool connect timed out")?.map_err(|e|e.to_string())?;
     stream.set_nodelay(true).map_err(|e|e.to_string())?;
-    let(read,mut write)=stream.into_split();let mut reader=BufReader::new(read);
+    let stream:Box<dyn PoolStream>=if tls{
+        let roots=RootCertStore{roots:webpki_roots::TLS_SERVER_ROOTS.to_vec()};
+        let config=ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+        let name=ServerName::try_from(host.clone()).map_err(|_|"Invalid TLS server name")?;
+        let secured=tokio::time::timeout(Duration::from_secs(15),TlsConnector::from(Arc::new(config)).connect(name,stream)).await
+            .map_err(|_|"TLS handshake timed out")?.map_err(|e|format!("TLS certificate/handshake failed: {e}"))?;
+        println!("TLS verified: {host}:{port}");Box::new(secured)
+    }else{Box::new(stream)};
+    let(read,mut write)=tokio::io::split(stream);let mut reader=BufReader::new(read);
     let mut file=match &o.log{Some(p)=>Some(std::fs::OpenOptions::new().create(true).append(true).open(p).map_err(|e|e.to_string())?),None=>None};
-    for req in [json!({"id":1,"method":"mining.subscribe","params":["lackminer-qbtc/0.3.0",{"device":if o.cpu{"cpu"}else{"gpu"}}]}),json!({"id":2,"method":"mining.authorize","params":[o.user,"x"]})]{
-        log(&mut file,json!({"direction":"TX","message":req}));write.write_all(format!("{req}\n").as_bytes()).await.map_err(|e|e.to_string())?;}
+    for req in [json!({"id":1,"method":"mining.subscribe","params":[concat!("lackminer-qbtc/",env!("CARGO_PKG_VERSION")),{"device":if o.cpu{"cpu"}else{"gpu"}}]}),json!({"id":2,"method":"mining.authorize","params":[o.user,"x"]})]{
+        log(&mut file,json!({"direction":"TX","message":req}));write.write_all(format!("{req}\n").as_bytes()).await.map_err(|e|e.to_string())?;write.flush().await.map_err(|e|e.to_string())?;}
     let base_hashes=HASHES.load(Ordering::Relaxed);
     let current=Arc::new(RwLock::new(None::<Job>));let running=Arc::new(AtomicBool::new(true));let hashes=Arc::new(AtomicU64::new(base_hashes));
     let(tx,mut rx)=tokio::sync::mpsc::channel::<Result<Share,String>>(64);
@@ -117,7 +144,7 @@ pub async fn mine(o:Options)->Result<(),String>{
             if line.map(|s|s.trim()=="stop").unwrap_or(false){let _=stop_tx.blocking_send(());break;}
         }
     });
-    println!("Connected to {endpoint}; authorizing {}",o.user);
+    println!("Connected to {host}:{port}; authorizing {}",o.user);
     let result=async {
         loop{tokio::select!{
             msg=read_line_limited(&mut reader,&mut line)=>{
@@ -149,7 +176,7 @@ pub async fn mine(o:Options)->Result<(),String>{
                 let proof=json!({"job_id":s.job.job_id,"nonce":s.nonce,"header":hex(&s.job.header),"digest":hex(&s.digest),"target":s.job.target,"cpu_verified":true});
                 log(&mut file,json!({"direction":"TX","message":request,"proof":proof}));
                 if o.debug{println!("TX {request}");}
-                write.write_all(format!("{request}\n").as_bytes()).await.map_err(|e|e.to_string())?;pending.insert(id,proof);id+=1;
+                write.write_all(format!("{request}\n").as_bytes()).await.map_err(|e|e.to_string())?;write.flush().await.map_err(|e|e.to_string())?;pending.insert(id,proof);id+=1;
             }
             _=tick.tick()=>{
                 let count=hashes.load(Ordering::Relaxed);let rate=(count-last_count) as f64/last.elapsed().as_secs_f64();last_count=count;last=Instant::now();
@@ -181,4 +208,10 @@ mod tests{
         assert_eq!(&j.header[..8],&17u64.to_be_bytes());assert_eq!(j.job_id,42);
     }
     #[test] fn malformed_hash_is_rejected(){assert!(decode32(&json!("z".repeat(64))).is_err());assert!(decode32(&json!("00")).is_err());}
+    #[test] fn tls_endpoint_is_explicit_and_plaintext_remote_is_rejected(){
+        assert_eq!(endpoint("stratum+ssl://ashenward.ru:3336").unwrap(),("ashenward.ru".into(),3336,true));
+        assert!(endpoint("stratum+tcp://ashenward.ru:3334").is_err());
+        assert!(endpoint("stratum+tcp://127.0.0.1:3334").is_ok());
+        for url in ["ashenward.ru:3336","https://ashenward.ru:3336","stratum+ssl://user:pass@ashenward.ru:3336","stratum+ssl://ashenward.ru:3336/path","stratum+ssl://ashenward.ru:3336?secret=x"]{assert!(endpoint(url).is_err());}
+    }
 }

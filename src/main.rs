@@ -141,7 +141,7 @@ fn gpu_bench(gpu:&opencl::Gpu,o:&Options)->Result<serde_json::Value,String>{
 }
 fn run()->Result<(),String>{
     if std::env::args().any(|arg|arg=="--help"||arg=="-h"){
-        println!("Pool GPU: --pool stratum+tcp://ashenward.ru:3334 --user QBTC_ADDRESS.worker --device 0\nPool CPU: --pool stratum+tcp://ashenward.ru:3334 --user QBTC_ADDRESS.worker --cpu --cpu-threads N\nPool fee: 1.5%; minimum payout: 10 QBTC. The SOLO fee does not apply to pool mining.");
+        println!("Pool GPU: --pool stratum+ssl://ashenward.ru:3336 --user QBTC_ADDRESS.worker --device 0\nPool CPU: --pool stratum+ssl://ashenward.ru:3336 --user QBTC_ADDRESS.worker --cpu --cpu-threads N\nPool fee: 1.5%; minimum payout: 10 QBTC. The SOLO fee does not apply to pool mining.");
     }
     ctrlc::set_handler(||SIGNAL_STOP.store(true,std::sync::atomic::Ordering::Relaxed)).map_err(|e|e.to_string())?;
     let(o,mode)=options()?;if mode=="help"{println!("lackminer-qbtc --list-devices | --self-test | --benchmark | --tune\n--device 0 --worksize 128 --batch 16777216 --unroll 1 --seconds 10 --cpu-threads N\n--solo --node http://127.0.0.1:24002 --user QBTC_ADDRESS --debug --log-file PATH\n--stop-after-accepted N --mine-seconds N\n--max-power W --power-limit W --power-percent P --core-clock MHZ --memory-clock MHZ\n--fan PERCENT --intensity 1..100 --max-temp C --max-hotspot C --stats-file PATH");return Ok(());}

@@ -7,6 +7,8 @@ import json
 import logging
 import pathlib
 import secrets
+import ssl
+import signal
 import time
 import urllib.parse
 
@@ -238,7 +240,7 @@ class Pool:
         work=self.ledger.db.execute('SELECT COALESCE(SUM(work),0),COUNT(*) FROM shares WHERE created>=?',(now-600,)).fetchone()
         value=self.ledger.summary(address)
         value.update({'name':'LackPool Q-BTC','algorithm':'SHA-256 / Q-BTC 120-byte header','payout_scheme':self.ledger.scheme,
-                      'mining_address':self.owner,'stratum':'stratum+tcp://ashenward.ru:3334',
+                      'mining_address':self.owner,'stratum':'stratum+ssl://ashenward.ru:3336',
                       'state':'mining' if self.ready else 'syncing','reason':self.reason,
                       'height':self.template['current_height']-1 if self.template else None,
                       'active_miners':len([s for s in self.sessions.values() if s['address']]),
@@ -301,7 +303,12 @@ class Pool:
 
 async def main(config):
     pool=Pool(config)
-    stratum=await asyncio.start_server(pool.miner,config.get('stratum_host','0.0.0.0'),config.get('stratum_port',3334),limit=8193)
+    context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version=ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(config['tls_cert'],config['tls_key'])
+    if hasattr(signal,'SIGHUP'):
+        asyncio.get_running_loop().add_signal_handler(signal.SIGHUP,lambda:context.load_cert_chain(config['tls_cert'],config['tls_key']))
+    stratum=await asyncio.start_server(pool.miner,config.get('stratum_host','0.0.0.0'),config.get('stratum_tls_port',3336),limit=8193,ssl=context,ssl_handshake_timeout=10,ssl_shutdown_timeout=5)
     http=await asyncio.start_server(pool.http,'127.0.0.1',config.get('http_port',3335),limit=16385)
     LOG.info('Stratum online; fee 1.5%%; %s; payout threshold 10 QBTC',pool.ledger.scheme)
     async with stratum,http:

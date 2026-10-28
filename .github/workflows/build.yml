@@ -26,6 +26,15 @@ jobs:
       - if: runner.os == 'Windows'
         run: cmake --build build/gpu-control --config Release
       - if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $status = Get-MpComputerStatus
+          if (-not $status.AntivirusEnabled) { throw 'Windows antivirus scan unavailable' }
+          Start-MpScan -ScanType CustomScan -ScanPath "$env:GITHUB_WORKSPACE\target\release\lackminer-qbtc.exe"
+          $detections = @(Get-MpThreatDetection | Where-Object { ($_.Resources -join ' ') -match 'lackminer-qbtc.exe' })
+          if ($detections.Count) { throw 'Windows build requires malware verdict review' }
+      - if: runner.os == 'Windows'
         run: python tools/package.py --platform windows --binary target/release/lackminer-qbtc.exe --helper build/gpu-control/Release/lackminer-gpu-control.exe --adlx-license "build/gpu-control/_deps/adlx-src/ADLX SDK License Agreement.pdf"
       - if: runner.os == 'Linux'
         run: python3 tools/package.py --platform linux --binary target/release/lackminer-qbtc

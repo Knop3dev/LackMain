@@ -485,7 +485,7 @@ dependencies = [
 
 [[package]]
 name = "lackminer-qbtc"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bech32",
  "bincode",
@@ -496,6 +496,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-rustls",
+ "webpki-roots",
 ]
 
 [[package]]

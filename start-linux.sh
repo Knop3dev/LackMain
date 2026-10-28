@@ -12,7 +12,8 @@ intensity="${C[3]:-100}"
 mode="${C[4]:-pool}"
 backend="${C[5]:-gpu}"
 threads="${C[6]:-2}"
-pool="${C[7]:-stratum+tcp://ashenward.ru:3334}"
+pool="${C[7]:-stratum+ssl://ashenward.ru:3336}"
+if [[ "$pool" == 'stratum+tcp://ashenward.ru:3334' ]]; then pool='stratum+ssl://ashenward.ru:3336'; fi
 read -r -p "Mode: pool or solo [$mode]: " answer
 mode="${answer:-$mode}"
 [[ "$mode" == pool || "$mode" == solo ]] || { echo 'Choose pool or solo';exit 1; }
@@ -39,7 +40,7 @@ fi
 if [[ "$mode" == pool ]]; then
   read -r -p "Pool URL [$pool]: " answer
   pool="${answer:-$pool}"
-  echo 'LackPool: 1.5% fee, proportional rewards, minimum payout 10 QBTC. No additional SOLO fee.'
+  echo 'LackPool: 1.5% fee, PPLNS rewards, minimum payout 10 QBTC. No additional SOLO fee.'
 else
   echo 'SOLO: 10% of the entire coinbase (subsidy and transaction fees).'
 fi

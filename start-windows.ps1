@@ -7,13 +7,14 @@ $NodeDir = Join-Path $Root 'node\official\v2.5.0'
 $NodeExe = Join-Path $NodeDir 'quantum-btc.exe'
 $NodeUrl = 'http://127.0.0.1:24002'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$Config = @{ user=''; device=0; max_power=120; intensity=100; mode='pool'; backend='gpu'; cpu_threads=2; pool='stratum+tcp://ashenward.ru:3334' }
+$Config = @{ user=''; device=0; max_power=120; intensity=100; mode='pool'; backend='gpu'; cpu_threads=2; pool='stratum+ssl://ashenward.ru:3336' }
 if (Test-Path -LiteralPath $ConfigPath) {
   $saved = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
   foreach ($name in @('user','device','max_power','intensity','mode','backend','cpu_threads','pool')) {
     if ($null -ne $saved.$name) { $Config[$name] = $saved.$name }
   }
 }
+if ($Config.pool -eq 'stratum+tcp://ashenward.ru:3334') { $Config.pool = 'stratum+ssl://ashenward.ru:3336' }
 $answer = Read-Host "Mode: pool or solo [$($Config.mode)]"
 if ($answer) { $Config.mode = $answer.ToLowerInvariant() }
 if ($Config.mode -notin @('pool','solo')) { throw 'Choose pool or solo' }
@@ -41,7 +42,7 @@ if ($Config.mode -eq 'pool' -and $Config.backend -eq 'cpu') {
 if ($Config.mode -eq 'pool') {
   $answer = Read-Host "Pool URL [$($Config.pool)]"
   if ($answer) { $Config.pool = $answer }
-  Write-Host 'LackPool: 1.5% fee, proportional rewards, minimum payout 10 QBTC. No additional SOLO fee.'
+  Write-Host 'LackPool: 1.5% fee, PPLNS rewards, minimum payout 10 QBTC. No additional SOLO fee.'
   if ((Read-Host 'Start pool mining? Type YES') -cne 'YES') { exit 0 }
   $Config | ConvertTo-Json | Set-Content -LiteralPath $ConfigPath -Encoding utf8
   $worker = $Config.user + '.' + $env:COMPUTERNAME

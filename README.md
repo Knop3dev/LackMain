@@ -2,7 +2,7 @@
 
 Q-BTC miner for Windows, Linux and Hive OS. CPU mining and OpenCL GPU mining on AMD and NVIDIA.
 
-**Pool:** [ashenward.ru/pool](https://ashenward.ru/pool/) · `stratum+tcp://ashenward.ru:3334`
+**Pool:** [ashenward.ru/pool](https://ashenward.ru/pool/) · `stratum+ssl://ashenward.ru:3336`
 
 ## Download and start
 
@@ -13,16 +13,18 @@ Download the [latest release](https://github.com/Knop3dev/LackMain/releases/late
 
 Choose `pool`, select `cpu` or `gpu`, enter your public Q-BTC address and confirm the start. GPU mode requires the manufacturer's OpenCL driver. CPU mode does not require a GPU. Pool mining does not require a local node.
 
+LackPool requires **0.3.1 or newer** and TLS on port **3336**. The miner verifies the certificate chain and server name. It does not fall back to plaintext. Port 3334 is closed; update old pool URLs in saved settings and Hive OS Flight Sheets.
+
 GPU:
 
 ```sh
-lackminer-qbtc --pool stratum+tcp://ashenward.ru:3334 --user YOUR_QBTC_ADDRESS.gpu0 --device 0 --max-power 170
+lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.gpu0 --device 0 --max-power 170
 ```
 
 CPU:
 
 ```sh
-lackminer-qbtc --pool stratum+tcp://ashenward.ru:3334 --user YOUR_QBTC_ADDRESS.cpu --cpu --cpu-threads 4
+lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.cpu --cpu --cpu-threads 4
 ```
 
 On Windows use `lackminer-qbtc.exe`; on Linux use `./lackminer-qbtc`. `--password x` is optional. Press Ctrl+C to stop. Pool connections reconnect automatically.
@@ -52,9 +54,9 @@ Use an Ubuntu 22.04 or newer image with OpenCL drivers. Create a Custom miner Fl
 | Setting | Value |
 | --- | --- |
 | Name | `lackminer-qbtc` |
-| Installation URL | [Hive OS archive](https://github.com/Knop3dev/LackMain/releases/download/v0.3.0/lackminer-qbtc-0.3.0-hiveos.tar.gz) |
+| Installation URL | [Hive OS archive](https://github.com/Knop3dev/LackMain/releases/download/v0.3.1/lackminer-qbtc-0.3.1-hiveos.tar.gz) |
 | Wallet template | Your public Q-BTC address |
-| Pool URL | `stratum+tcp://ashenward.ru:3334` |
+| Pool URL | `stratum+ssl://ashenward.ru:3336` |
 | Extra config | `--devices all --max-power 170` |
 
 All detected AMD/NVIDIA GPUs are used by default. Mixed workers are supported. Select cards with `--devices 0,1,2`. Each GPU has its own mining process, statistics and restart policy. Pool mode does not start a node. Use Hive OC profiles for farm clocks and fans.
@@ -85,24 +87,24 @@ Windows AMD controls: `cmake -S gpu-control -B build/gpu-control`, then `cmake -
 
 Скачайте [последний релиз](https://github.com/Knop3dev/LackMain/releases/latest). На Windows запустите `start-windows.cmd`, на Linux — `bash start-linux.sh`. Выберите `pool`, затем `cpu` или `gpu`, укажите публичный адрес Q-BTC и подтвердите запуск.
 
-Пул: **`stratum+tcp://ashenward.ru:3334`**. Статистика и баланс: **[ashenward.ru/pool](https://ashenward.ru/pool/)**. Локальная нода для пула не нужна.
+Пул: **`stratum+ssl://ashenward.ru:3336`**. Статистика и баланс: **[ashenward.ru/pool](https://ashenward.ru/pool/)**. Локальная нода для пула не нужна.
 
 GPU:
 
 ```sh
-lackminer-qbtc --pool stratum+tcp://ashenward.ru:3334 --user YOUR_QBTC_ADDRESS.gpu0 --device 0 --max-power 170
+lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.gpu0 --device 0 --max-power 170
 ```
 
 CPU:
 
 ```sh
-lackminer-qbtc --pool stratum+tcp://ashenward.ru:3334 --user YOUR_QBTC_ADDRESS.cpu --cpu --cpu-threads 4
+lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.cpu --cpu --cpu-threads 4
 ```
 
 Схема — **PPLNS**: учитывается последняя работа в окне 2× ожидаемой работы на блок при его сложности. Вес шары зависит от сложности, граничная шара учитывается частично. После блока окно не сбрасывается; при первоначальном заполнении награда делится по имеющейся работе.
 
 Комиссия пула — **1,5%**, дополнительных 10% в pool-режиме нет. Начисления становятся доступными после созревания награды и проверки основной цепи. Выплата — **от 10 Q-BTC** на адрес майнера; комиссию транзакции оплачивает оператор из резерва комиссии пула.
 
-Для Hive OS укажите архив из таблицы выше, свой адрес в Wallet template и `stratum+tcp://ashenward.ru:3334` в Pool URL. Extra config: `--devices all --max-power 170`. Поддерживаются несколько GPU в одном воркере и смешанные AMD/NVIDIA.
+Для Hive OS укажите архив из таблицы выше, свой адрес в Wallet template и `stratum+ssl://ashenward.ru:3336` в Pool URL. Extra config: `--devices all --max-power 170`. Поддерживаются несколько GPU в одном воркере и смешанные AMD/NVIDIA.
 
 В режиме SOLO сохраняется отдельная комиссия разработчика 10%. Для SOLO нужна синхронизированная локальная нода. `--max-power` ограничивает работу по показаниям датчика и допускает краткие превышения; аппаратное ограничение мощности задаётся отдельно при поддержке драйвера.
