@@ -197,6 +197,11 @@ class Miner:
                     self.stop_event.wait(0.05)
                     continue
                 job, base = assignment
+                dispatch_size=size
+                if device!='cpu':
+                    count=min(count,max(1,((1<<256)//job['target'])*8))
+                    if count<dispatch_size:dispatch_size=1
+                    count=max(dispatch_size,count//dispatch_size*dispatch_size)
                 if device != 'cpu':
                     sensor = self.hardware.read(self.devices_cache[device])
                     limits = self.settings.tuning.get(str(device), {})
@@ -212,7 +217,7 @@ class Miner:
                         continue
                 head, tail = split_job(job['block'])
                 started = time.perf_counter()
-                hits = engine.search(head, tail, base, count, job['target'], size)
+                hits = engine.search(head, tail, base, count, job['target'], dispatch_size)
                 elapsed = time.perf_counter() - started
                 self.account(device, count, elapsed)
                 for nonce in hits:
@@ -289,6 +294,11 @@ class Miner:
                             chain = node.get('/api/chain?limit=12')
                             chain = chain if isinstance(chain, list) else chain.get('chain', chain.get('blocks', []))
                             validate_chain(chain)
+                            if self.stats['node_height'] is not None and chain[-1]['index']<self.stats['node_height']:
+                                raise ValueError('Node height regressed; waiting for synchronization')
+                            if self.pending and any(b['hash']==self.pending[1]['hash'] for b in chain):
+                                recovered=self.pending[1]
+                                self.record_block(recovered,{'status':'confirmed in public chain'})
                             difficulty = node.get('/api/difficulty/next')
                             founder = node.get('/api/founder/stats')
                             mempool = node.get('/api/mempool')
@@ -382,14 +392,8 @@ class Miner:
                         last_poll = 0
                         continue
                     if outcome == 'accepted':
-                        with self.lock:
-                            self.stats['accepted'] += 1
-                            self.stats['blocks'] += 1
+                        self.record_block(candidate,response)
                         opens = {candidate['hash']: next_window(time.time(), elapsed)}
-                        proof = {'height': candidate['index'], 'hash': candidate['hash'], 'nonce': candidate['work_nonce'], 'payout_address': self.settings.address, 'node_response': response, 'block': candidate}
-                        proofs = self.directory / 'blocks'
-                        proofs.mkdir(exist_ok=True)
-                        (proofs / (str(candidate['index']) + '.json')).write_text(json.dumps(proof, indent=2))
                         self.log('Block ' + str(candidate['index']) + ' accepted')
                         self.pending = None
                         tip = None
@@ -421,3 +425,14 @@ class Miner:
             self.state(hashrate=0)
             if self.stats['state'] != 'Error':
                 self.state(state='Stopped')
+
+    def record_block(self,candidate,response):
+        proofs=self.directory/'blocks';proofs.mkdir(exist_ok=True);path=proofs/(str(candidate['index'])+'.json')
+        if path.exists():
+            try:
+                if json.loads(path.read_text()).get('hash')==candidate['hash']:return
+            except (OSError,ValueError):pass
+        proof={'height':candidate['index'],'hash':candidate['hash'],'nonce':candidate['work_nonce'],'payout_address':self.settings.address,'node_response':response,'block':candidate}
+        path.write_text(json.dumps(proof,indent=2))
+        with self.lock:self.stats['accepted']+=1;self.stats['blocks']+=1
+        self.log('Block '+str(candidate['index'])+' confirmed by node')
