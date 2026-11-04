@@ -1,0 +1,80 @@
+name: Build lackminer LBTC
+on:
+  push:
+    branches: [lbtc]
+    tags: ['lbtc-v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            label: windows-x86_64
+          - os: ubuntu-22.04
+            label: linux-x86_64
+          - os: macos-15-intel
+            label: macos-x86_64
+          - os: macos-15
+            label: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - if: runner.os != 'Linux'
+        run: python -m pip install -r requirements.txt pyinstaller==6.16.0
+      - if: runner.os != 'Linux'
+        run: python -m unittest discover -s tests -v
+      - if: runner.os == 'Windows'
+        run: cmake -S native -B build/native
+      - if: runner.os == 'Windows'
+        run: cmake --build build/native --config Release
+      - if: runner.os != 'Linux'
+        run: python tools/package.py
+      - if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work python:3.12-bullseye bash -ec '
+            apt-get update -qq
+            apt-get install -y -qq python3-tk libtk8.6 libtcl8.6
+            python -m pip install -r requirements.txt pyinstaller==6.16.0
+            python -m unittest discover -s tests -v
+            python tools/package.py
+          '
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & dist/lackminer-lbtc.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Executable smoke test failed' }
+      - if: runner.os != 'Windows'
+        run: ./dist/lackminer-lbtc --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lackminer-lbtc-${{ matrix.label }}
+          path: |
+            dist/lackminer-lbtc-*.zip
+            dist/lackminer-lbtc-*.tar.gz
+            dist/lackminer-lbtc-*.sha256
+  release:
+    if: startsWith(github.ref, 'refs/tags/lbtc-v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Prepare draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          sha256sum *.zip *.tar.gz > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" *.zip *.tar.gz SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --draft --prerelease --title "lackminer LBTC 0.1.0" --notes-file ../RELEASE.md

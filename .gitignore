@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.spec
+*.log
+settings.json
+prepared.json
+blocks/
+wallet*.json
+*.key
+*.pem
+*.dpapi
+*.sqlite*
+*.zip
+*.tar.gz

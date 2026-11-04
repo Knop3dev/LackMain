@@ -1,0 +1,68 @@
+[
+  {
+    "kind": "synthetic serialization vector",
+    "block": {
+      "index": 1,
+      "timestamp": 1793491380,
+      "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "difficulty": "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "nonce": 0,
+      "transactions": [
+        {
+          "sender": "coinbase",
+          "recipient": "benchmark",
+          "amount": 5000000000,
+          "fee": 0,
+          "timestamp": 1793491380
+        }
+      ],
+      "work_nonce": 1000000000000,
+      "mining_pad": "00000000000000000000000000000000000000000000000000"
+    },
+    "hash": "c51a8df4c42c0d47bcfba351b9fe9fc9138b1a1cc8d006e2fa2e64ee7fd8a69a"
+  },
+  {
+    "kind": "synthetic serialization vector",
+    "block": {
+      "index": 1,
+      "timestamp": 1793491380,
+      "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "difficulty": "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "nonce": 0,
+      "transactions": [
+        {
+          "sender": "coinbase",
+          "recipient": "benchmark",
+          "amount": 5000000000,
+          "fee": 0,
+          "timestamp": 1793491380
+        }
+      ],
+      "work_nonce": 1000999999999,
+      "mining_pad": "00000000000000000000000000000000000000000000000000"
+    },
+    "hash": "7b6060f83bc8d0e60fb64aa139c2a66e5c1bad88e115cd1f60ee19ce190362ec"
+  },
+  {
+    "kind": "synthetic serialization vector",
+    "block": {
+      "index": 1,
+      "timestamp": 1793491380,
+      "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "difficulty": "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "nonce": 0,
+      "transactions": [
+        {
+          "sender": "coinbase",
+          "recipient": "benchmark",
+          "amount": 5000000000,
+          "fee": 0,
+          "timestamp": 1793491380
+        }
+      ],
+      "work_nonce": 1001000000000,
+      "mining_pad": "00000000000000000000000000000000000000000000000000"
+    },
+    "hash": "89257efec147343475d0c978402d45dae82d37f9d0e5de6d14aef4aee5d55ed3"
+  }
+]
