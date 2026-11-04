@@ -85,7 +85,7 @@ class Miner:
         with self.lock:
             if self.running():
                 raise ValueError('Stop mining before changing settings')
-            self.user_stopped=True
+            self.user_stopped = True
             known = {f.name for f in dataclasses.fields(Settings)}
             if set(value) - known:
                 raise ValueError('Unknown settings')
@@ -133,7 +133,7 @@ class Miner:
                 except queue.Empty:
                     break
             self.stats.update(state='Connecting', error=None, devices={}, hashrate=0, average_hashrate=0, wait_until=None)
-            self.stats['devices']={str(d['id']):{'name':d['name'],'pci':d.get('pci'),'hashrate':0} for d in available if d['id'] in self.settings.devices}
+            self.stats['devices'] = {str(d['id']): {'name': d['name'], 'pci': d.get('pci'), 'hashrate': 0} for d in available if d['id'] in self.settings.devices}
             self.thread = threading.Thread(target=self.run, daemon=True)
             self.thread.start()
 
@@ -189,19 +189,22 @@ class Miner:
                 self.log(str(device) + ': CPU/GPU self-test passed')
             size = min(self.settings.worksize, engine.max_workgroup)
             count = 4096 * self.settings.cpu_workers if device == 'cpu' else self.settings.batch
+            maximum_count = count
             pacer = DispatchPacer(self.settings.intensity)
             self.log(str(device) + ': ' + engine.name)
             while not self.stop_event.is_set():
+                count = maximum_count
                 assignment = self.reserve(count)
                 if assignment is None:
                     self.stop_event.wait(0.05)
                     continue
                 job, base = assignment
-                dispatch_size=size
-                if device!='cpu':
-                    count=min(count,max(1,((1<<256)//job['target'])*8))
-                    if count<dispatch_size:dispatch_size=1
-                    count=max(dispatch_size,count//dispatch_size*dispatch_size)
+                dispatch_size = size
+                if device != 'cpu':
+                    count = min(count, max(1, (1 << 256) // job['target'] * 8))
+                    if count < dispatch_size:
+                        dispatch_size = 1
+                    count = max(dispatch_size, count // dispatch_size * dispatch_size)
                 if device != 'cpu':
                     sensor = self.hardware.read(self.devices_cache[device])
                     limits = self.settings.tuning.get(str(device), {})
@@ -294,11 +297,11 @@ class Miner:
                             chain = node.get('/api/chain?limit=12')
                             chain = chain if isinstance(chain, list) else chain.get('chain', chain.get('blocks', []))
                             validate_chain(chain)
-                            if self.stats['node_height'] is not None and chain[-1]['index']<self.stats['node_height']:
+                            if self.stats['node_height'] is not None and chain[-1]['index'] < self.stats['node_height']:
                                 raise ValueError('Node height regressed; waiting for synchronization')
-                            if self.pending and any(b['hash']==self.pending[1]['hash'] for b in chain):
-                                recovered=self.pending[1]
-                                self.record_block(recovered,{'status':'confirmed in public chain'})
+                            if self.pending and any((b['hash'] == self.pending[1]['hash'] for b in chain)):
+                                recovered = self.pending[1]
+                                self.record_block(recovered, {'status': 'confirmed in public chain'})
                             difficulty = node.get('/api/difficulty/next')
                             founder = node.get('/api/founder/stats')
                             mempool = node.get('/api/mempool')
@@ -392,7 +395,7 @@ class Miner:
                         last_poll = 0
                         continue
                     if outcome == 'accepted':
-                        self.record_block(candidate,response)
+                        self.record_block(candidate, response)
                         opens = {candidate['hash']: next_window(time.time(), elapsed)}
                         self.log('Block ' + str(candidate['index']) + ' accepted')
                         self.pending = None
@@ -426,13 +429,19 @@ class Miner:
             if self.stats['state'] != 'Error':
                 self.state(state='Stopped')
 
-    def record_block(self,candidate,response):
-        proofs=self.directory/'blocks';proofs.mkdir(exist_ok=True);path=proofs/(str(candidate['index'])+'.json')
+    def record_block(self, candidate, response):
+        proofs = self.directory / 'blocks'
+        proofs.mkdir(exist_ok=True)
+        path = proofs / (str(candidate['index']) + '.json')
         if path.exists():
             try:
-                if json.loads(path.read_text()).get('hash')==candidate['hash']:return
-            except (OSError,ValueError):pass
-        proof={'height':candidate['index'],'hash':candidate['hash'],'nonce':candidate['work_nonce'],'payout_address':self.settings.address,'node_response':response,'block':candidate}
-        path.write_text(json.dumps(proof,indent=2))
-        with self.lock:self.stats['accepted']+=1;self.stats['blocks']+=1
-        self.log('Block '+str(candidate['index'])+' confirmed by node')
+                if json.loads(path.read_text()).get('hash') == candidate['hash']:
+                    return
+            except (OSError, ValueError):
+                pass
+        proof = {'height': candidate['index'], 'hash': candidate['hash'], 'nonce': candidate['work_nonce'], 'payout_address': self.settings.address, 'node_response': response, 'block': candidate}
+        path.write_text(json.dumps(proof, indent=2))
+        with self.lock:
+            self.stats['accepted'] += 1
+            self.stats['blocks'] += 1
+        self.log('Block ' + str(candidate['index']) + ' confirmed by node')
