@@ -181,9 +181,11 @@ class Window:
         self.summary.configure(text=d['state'] + '  ·  ' + format_rate(d['hashrate']) + '  ·  Accepted ' + str(d['accepted']) + '  ·  Blocks ' + str(d['blocks']) + ('  ·  ' + str(d['error']) if d['error'] else ''))
         self.wallet_state.configure(text=TEXT[self.language]['unlocked' if d['unlocked'] else 'locked'])
         self.tree.delete(*self.tree.get_children())
-        for identifier, row in d['devices'].items():
+        rows = {str(x['id']): {} for x in self.device_list}
+        rows.update(d['devices'])
+        for identifier, row in rows.items():
             name = 'CPU' if identifier == 'cpu' else next((x['name'] for x in self.device_list if str(x['id']) == identifier), 'GPU ' + identifier)
-            self.tree.insert('', 'end', values=(name, format_rate(row.get('hashrate', 0) if d['state'] == 'Mining' else 0), str(row.get('temperature_c', '—')) + ' / ' + str(row.get('hotspot_c', '—')), row.get('power_w', '—'), row.get('utilization_percent', '—')))
+            self.tree.insert('', 'end', values=('[' + identifier + '] ' + name, format_rate(row.get('hashrate', 0) if d['state'] == 'Mining' else 0), str(row.get('temperature_c', '—')) + ' / ' + str(row.get('hotspot_c', '—')), row.get('power_w', '—'), row.get('utilization_percent', '—')))
         self.log_widget.configure(state='normal')
         self.log_widget.delete('1.0', 'end')
         self.log_widget.insert('1.0', '\n'.join((time_string(x['time']) + '  ' + x['message'] for x in d['logs'])))

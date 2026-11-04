@@ -83,7 +83,15 @@ def main(argv=None):
                 count = check(engine)
                 print(json.dumps({'device': identifier, 'self_test_nonces': count, 'result': 'PASS'}))
                 if args.benchmark:
-                    row = benchmark(engine, args.seconds, min(settings.worksize, engine.max_workgroup), settings.batch)
+                    from hardware import Hardware
+                    hardware = Hardware()
+                    device = next((d for d in devices if d['id'] == identifier))
+
+                    def thermal_guard():
+                        sensor = hardware.read(device)
+                        if (sensor.get('temperature_c') or 0) >= settings.max_temperature or (sensor.get('hotspot_c') or 0) >= settings.max_hotspot:
+                            raise RuntimeError('Benchmark stopped at the configured temperature limit')
+                    row = benchmark(engine, args.seconds, min(settings.worksize, engine.max_workgroup), settings.batch, guard=thermal_guard)
                     row['GPU_CPU_ratio'] = row['H_s'] / cpu
                     print(json.dumps(row))
             finally:

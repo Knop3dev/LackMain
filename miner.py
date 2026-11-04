@@ -69,6 +69,11 @@ class Miner:
         with self.lock:
             result = copy.deepcopy(self.stats)
             result.update(settings=dataclasses.asdict(self.settings), unlocked=self.key is not None, running=self.running(), logs=list(self.logs))
+            if not self.samples or time.monotonic() - self.samples[-1][0] > 2:
+                result['hashrate'] = 0
+            for row in result['devices'].values():
+                if time.monotonic() - row.pop('last_hash_at', 0) > 2:
+                    row['hashrate'] = 0
             if self.stats['state'] != 'Mining':
                 result['hashrate'] = 0
             return result
@@ -163,7 +168,7 @@ class Miner:
             self.total += count
             now = time.monotonic()
             row = self.stats['devices'].setdefault(str(device), {})
-            row.update(hashrate=count / max(elapsed, 1e-06), hashes=row.get('hashes', 0) + count)
+            row.update(hashrate=count / max(elapsed, 1e-06), hashes=row.get('hashes', 0) + count, last_hash_at=now)
             self.samples.append((now, self.total))
             cutoff = now - 60
             while len(self.samples) > 2 and self.samples[1][0] < cutoff:
@@ -251,6 +256,7 @@ class Miner:
             self.job = restored
             self.pending = (restored, block)
             self.stats['wait_until'] = max(block['timestamp'], min(data['deadline'], time.time() + 3600))
+            self.stats['state'] = 'Waiting'
         except (OSError, ValueError, TypeError, KeyError):
             pass
 

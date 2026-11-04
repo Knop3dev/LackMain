@@ -20,7 +20,7 @@ def check(engine):
         tested += 32
     return tested
 
-def benchmark(engine, seconds, worksize, batch, stop=None):
+def benchmark(engine, seconds, worksize, batch, stop=None, guard=None):
     block = example()
     head, tail = split_job(block)
     base = 10 ** 12
@@ -28,6 +28,8 @@ def benchmark(engine, seconds, worksize, batch, stop=None):
     engine.search(head, tail, base, batch, 0, worksize)
     started = time.perf_counter()
     while time.perf_counter() - started < seconds:
+        if guard is not None:
+            guard()
         if stop is not None and stop.is_set():
             break
         engine.search(head, tail, base, batch, 0, worksize)
