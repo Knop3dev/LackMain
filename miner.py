@@ -85,6 +85,7 @@ class Miner:
         with self.lock:
             if self.running():
                 raise ValueError('Stop mining before changing settings')
+            self.user_stopped=True
             known = {f.name for f in dataclasses.fields(Settings)}
             if set(value) - known:
                 raise ValueError('Unknown settings')
@@ -132,6 +133,7 @@ class Miner:
                 except queue.Empty:
                     break
             self.stats.update(state='Connecting', error=None, devices={}, hashrate=0, average_hashrate=0, wait_until=None)
+            self.stats['devices']={str(d['id']):{'name':d['name'],'pci':d.get('pci'),'hashrate':0} for d in available if d['id'] in self.settings.devices}
             self.thread = threading.Thread(target=self.run, daemon=True)
             self.thread.start()
 

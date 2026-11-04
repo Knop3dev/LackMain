@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$(readlink -f "$0")")"
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 source h-manifest.conf
 export LACKMINER_DATA="$PWD/data"
 mode=$(jq -r '.mode' "$CUSTOM_CONFIG_FILENAME")
