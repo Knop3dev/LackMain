@@ -1,8 +1,5 @@
 name: Build lackminer qbtc
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
   workflow_dispatch:
 jobs:
   build:

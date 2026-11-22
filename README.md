@@ -18,7 +18,7 @@ LackPool requires **0.3.1 or newer** and TLS on port **3336**. The miner verifie
 GPU:
 
 ```sh
-lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.gpu0 --device 0 --max-power 170
+lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.gpu0 --device 0
 ```
 
 CPU:
@@ -43,7 +43,7 @@ All rewards initially arrive at the operator's pool wallet. The payout service t
 
 `--list-devices` lists GPU indices. `--device N` selects one GPU. `--worksize 64|128|256`, `--batch N` and `--unroll 0|1` control OpenCL batching.
 
-`--max-power W` is a measured-power protection threshold that pauses computation; it is not a hard board-power limit and brief overshoots are possible. `--power-limit W` requests a driver power limit where supported. `--power-percent P`, `--core-clock MHz`, `--memory-clock MHz`, `--fan PERCENT`, `--intensity 1..100`, `--max-temp C` and `--max-hotspot C` depend on driver support. Required sensor loss pauses protected mining. Driver settings are restored on normal exit.
+`--max-power W` is a measured-power protection threshold that pauses computation; it is not a hard board-power limit and brief overshoots are possible. `--power-limit W` requests a driver power limit where supported. `--power-percent P`, `--core-clock MHz`, `--memory-clock MHz`, `--fan PERCENT`, `--intensity 1..100`, `--max-temp C` and `--max-hotspot C` depend on driver support. Integrated GPUs can mine without temperature or power telemetry. The launchers default to driver-managed power (0); existing saved limits remain unchanged. Set the launcher power budget to 0 if your GPU has no power sensor. Explicit --max-power, --max-temp and --max-hotspot settings require their corresponding sensors. Loss of a monitored sensor pauses protected mining. Driver settings are restored on normal exit.
 
 `--log-file miner.jsonl` records mining events. `--stats-file stats.json` provides current machine-readable statistics.
 
@@ -54,17 +54,17 @@ Use an Ubuntu 22.04 or newer image with OpenCL drivers. Create a Custom miner Fl
 | Setting | Value |
 | --- | --- |
 | Name | `lackminer-qbtc` |
-| Installation URL | [Hive OS archive](https://github.com/Knop3dev/LackMain/releases/download/v0.3.1/lackminer-qbtc-0.3.1-hiveos.tar.gz) |
+| Installation URL | [Hive OS archive](https://github.com/Knop3dev/LackMain/releases/download/v0.3.2/lackminer-qbtc-0.3.2-hiveos.tar.gz) |
 | Wallet template | Your public Q-BTC address |
 | Pool URL | `stratum+ssl://ashenward.ru:3336` |
-| Extra config | `--devices all --max-power 170` |
+| Extra config | `--devices all` |
 
 All detected AMD/NVIDIA GPUs are used by default. Mixed workers are supported. Select cards with `--devices 0,1,2`. Each GPU has its own mining process, statistics and restart policy. Pool mode does not start a node. Use Hive OC profiles for farm clocks and fans.
 
 ## SOLO
 
 ```sh
-lackminer-qbtc --solo --node http://127.0.0.1:24002 --user YOUR_QBTC_ADDRESS --device 0 --max-power 170
+lackminer-qbtc --solo --node http://127.0.0.1:24002 --user YOUR_QBTC_ADDRESS --device 0
 ```
 
 SOLO retains the disclosed **10% developer fee**, separate from pool mode. The fee covers subsidy and transaction fees. The remaining 90% goes to the miner's address. Fee address: `qbtc10y29nvfuwyxfxhkl4yqkenw4u6hshsk9zgaf5ctz4zfpa2gxe45qtwawce`. If both addresses match, the full coinbase goes to that address.
@@ -92,7 +92,7 @@ Windows AMD controls: `cmake -S gpu-control -B build/gpu-control`, then `cmake -
 GPU:
 
 ```sh
-lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.gpu0 --device 0 --max-power 170
+lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.gpu0 --device 0
 ```
 
 CPU:
@@ -105,6 +105,8 @@ lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.c
 
 Комиссия пула — **1,5%**, дополнительных 10% в pool-режиме нет. Начисления становятся доступными после созревания награды и проверки основной цепи. Выплата — **от 10 Q-BTC** на адрес майнера; комиссию транзакции оплачивает оператор из резерва комиссии пула.
 
-Для Hive OS укажите архив из таблицы выше, свой адрес в Wallet template и `stratum+ssl://ashenward.ru:3336` в Pool URL. Extra config: `--devices all --max-power 170`. Поддерживаются несколько GPU в одном воркере и смешанные AMD/NVIDIA.
+Для Hive OS укажите архив из таблицы выше, свой адрес в Wallet template и `stratum+ssl://ashenward.ru:3336` в Pool URL. Extra config: `--devices all`. Поддерживаются несколько GPU в одном воркере и смешанные AMD/NVIDIA.
 
 В режиме SOLO сохраняется отдельная комиссия разработчика 10%. Для SOLO нужна синхронизированная локальная нода. `--max-power` ограничивает работу по показаниям датчика и допускает краткие превышения; аппаратное ограничение мощности задаётся отдельно при поддержке драйвера.
+
+Встроенная графика может майнить без датчиков температуры и мощности. В стартовом скрипте значение мощности 0 оставляет управление драйверу; это настройка по умолчанию для новой конфигурации. Сохранённый лимит не меняется автоматически: при отсутствии датчика мощности выберите 0. Явно заданные `--max-power`, `--max-temp` и `--max-hotspot` требуют соответствующих датчиков. Защита по доступным температурным датчикам сохраняется.

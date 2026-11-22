@@ -7,7 +7,7 @@ CONFIG="$ROOT/miner-config.txt"
 if [[ -f "$CONFIG" ]]; then mapfile -t C < "$CONFIG"; else C=(); fi
 wallet="${C[0]:-}"
 device="${C[1]:-0}"
-power="${C[2]:-120}"
+power="${C[2]:-0}"
 intensity="${C[3]:-100}"
 mode="${C[4]:-pool}"
 backend="${C[5]:-gpu}"
@@ -32,11 +32,14 @@ else
 "$MINER" --list-devices
 read -r -p "GPU index [$device]: " answer
 device="${answer:-$device}"
-read -r -p "Measured power budget in W [$power]: " answer
+read -r -p "Measured power budget in W (0 = driver-managed, no power sensor needed) [$power]: " answer
 power="${answer:-$power}"
+[[ "$power" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo 'Power budget must be 0 or a positive number';exit 1; }
 read -r -p "Intensity 1..100 [$intensity]: " answer
 intensity="${answer:-$intensity}"
 fi
+power_args=()
+if [[ "$power" =~ [1-9] ]]; then power_args=(--max-power "$power");fi
 if [[ "$mode" == pool ]]; then
   read -r -p "Pool URL [$pool]: " answer
   pool="${answer:-$pool}"
@@ -50,12 +53,12 @@ printf '%s\n' "$wallet" "$device" "$power" "$intensity" "$mode" "$backend" "$thr
 if [[ "$mode" == pool ]]; then
   worker="$(hostname -s)";worker="${worker//[^a-zA-Z0-9_-]/_}"
   args=(--pool "$pool" --user "$wallet.$worker" --log-file "$ROOT/miner.jsonl" --stats-file "$ROOT/stats.json")
-  if [[ "$backend" == cpu ]]; then args+=(--cpu --cpu-threads "$threads");else args+=(--device "$device" --max-power "$power" --intensity "$intensity");fi
+  if [[ "$backend" == cpu ]]; then args+=(--cpu --cpu-threads "$threads");else args+=(--device "$device" "${power_args[@]}" --intensity "$intensity");fi
   exec "$MINER" "${args[@]}"
 fi
 bash "$ROOT/node-linux.sh"
 while true; do
-  "$MINER" --solo --node http://127.0.0.1:24002 --user "$wallet" --device "$device" --max-power "$power" --intensity "$intensity" --log-file "$ROOT/miner.jsonl" --stats-file "$ROOT/stats.json" && break
+  "$MINER" --solo --node http://127.0.0.1:24002 --user "$wallet" --device "$device" "${power_args[@]}" --intensity "$intensity" --log-file "$ROOT/miner.jsonl" --stats-file "$ROOT/stats.json" && break
   echo 'Miner failed; retrying in 10 seconds. Ctrl+C to stop.'
   sleep 10
 done

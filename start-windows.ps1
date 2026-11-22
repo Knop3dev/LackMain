@@ -7,7 +7,7 @@ $NodeDir = Join-Path $Root 'node\official\v2.5.0'
 $NodeExe = Join-Path $NodeDir 'quantum-btc.exe'
 $NodeUrl = 'http://127.0.0.1:24002'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$Config = @{ user=''; device=0; max_power=120; intensity=100; mode='pool'; backend='gpu'; cpu_threads=2; pool='stratum+ssl://ashenward.ru:3336' }
+$Config = @{ user=''; device=0; max_power=0; intensity=100; mode='pool'; backend='gpu'; cpu_threads=2; pool='stratum+ssl://ashenward.ru:3336' }
 if (Test-Path -LiteralPath $ConfigPath) {
   $saved = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
   foreach ($name in @('user','device','max_power','intensity','mode','backend','cpu_threads','pool')) {
@@ -34,8 +34,9 @@ if ($Config.mode -eq 'pool' -and $Config.backend -eq 'cpu') {
   & $Miner --list-devices
   $answer = Read-Host "GPU index [$($Config.device)]"
   if ($answer) { $Config.device = [int]$answer }
-  $answer = Read-Host "Measured GPU power budget in W [$($Config.max_power)]"
+  $answer = Read-Host "Measured GPU power budget in W (0 = driver-managed, works without power sensor) [$($Config.max_power)]"
   if ($answer) { $Config.max_power = [double]$answer }
+  if ([double]::IsNaN($Config.max_power) -or [double]::IsInfinity($Config.max_power) -or $Config.max_power -lt 0) { throw 'Power budget must be 0 or a positive number' }
   $answer = Read-Host "Intensity 1..100 [$($Config.intensity)]"
   if ($answer) { $Config.intensity = [int]$answer }
 }
@@ -48,7 +49,10 @@ if ($Config.mode -eq 'pool') {
   $worker = $Config.user + '.' + $env:COMPUTERNAME
   $arguments = @('--pool',$Config.pool,'--user',$worker,'--log-file',(Join-Path $Root 'miner.jsonl'),'--stats-file',(Join-Path $Root 'stats.json'))
   if ($Config.backend -eq 'cpu') { $arguments += @('--cpu','--cpu-threads',[string]$Config.cpu_threads) }
-  else { $arguments += @('--device',[string]$Config.device,'--max-power',[string]$Config.max_power,'--intensity',[string]$Config.intensity) }
+  else {
+    $arguments += @('--device',[string]$Config.device,'--intensity',[string]$Config.intensity)
+    if ($Config.max_power -gt 0) { $arguments += @('--max-power',[string]$Config.max_power) }
+  }
   & $Miner @arguments
   exit $LASTEXITCODE
 }
@@ -84,7 +88,9 @@ if (-not $ready) {
 }
 if (-not $ready) { throw 'Local node unavailable; inspect node logs' }
 while ($true) {
-  & $Miner --solo --node $NodeUrl --user $Config.user --device $Config.device --max-power $Config.max_power --intensity $Config.intensity --log-file (Join-Path $Root 'miner.jsonl') --stats-file (Join-Path $Root 'stats.json')
+  $arguments = @('--solo','--node',$NodeUrl,'--user',$Config.user,'--device',[string]$Config.device,'--intensity',[string]$Config.intensity,'--log-file',(Join-Path $Root 'miner.jsonl'),'--stats-file',(Join-Path $Root 'stats.json'))
+  if ($Config.max_power -gt 0) { $arguments += @('--max-power',[string]$Config.max_power) }
+  & $Miner @arguments
   if ($LASTEXITCODE -eq 0) { break }
   Write-Host 'Miner failed; retrying in 10 seconds. Ctrl+C to stop.'
   Start-Sleep 10

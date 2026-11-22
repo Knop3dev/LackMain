@@ -126,6 +126,17 @@ impl Drop for Hardware {
 #[derive(Default)]
 pub struct Policy { pub power:Option<f64>,pub temperature:Option<i32>,pub hotspot:Option<i32>,thermal_paused:bool,power_paused:bool }
 impl Policy {
+    fn configure(power:Option<f64>,temperature:Option<i32>,hotspot:Option<i32>,reading:Option<Reading>)->Result<Self,String>{
+        let r=reading.unwrap_or_default();
+        for (requested,available,flag,sensor) in [
+            (power.is_some(),r.power.is_some(),"--max-power","power"),
+            (temperature.is_some(),r.temperature.is_some(),"--max-temp","temperature"),
+            (hotspot.is_some(),r.hotspot.is_some(),"--max-hotspot","hotspot"),
+        ] {
+            if requested&&!available{return Err(format!("{flag} requires a {sensor} sensor, but the selected GPU driver does not expose it. Remove {flag} to use the driver-managed limits; in the launcher, set the measured power budget to 0 if the power sensor is unavailable."));}
+        }
+        Ok(Self{power,temperature:temperature.or(r.temperature.map(|_|80)),hotspot:hotspot.or(r.hotspot.map(|_|80)),..Default::default()})
+    }
     pub fn phase(&mut self,r:Option<Reading>)->&'static str {
         let protected=self.power.is_some()||self.temperature.is_some()||self.hotspot.is_some();
         let Some(r)=r else {return if protected {"sensor_unavailable"}else{"mining"};};
@@ -142,8 +153,8 @@ pub struct Monitor { _hardware:Hardware,telemetry:Option<Telemetry>,pub reading:
 impl Monitor {
     pub fn new(id:&DeviceIdentity,o:&Options)->Result<Self,String>{
         let telemetry=Telemetry::new(id);let reading=telemetry.as_ref().and_then(Telemetry::read);
-        let mut policy=Policy{power:o.max_power,temperature:o.max_temp.or_else(||reading.and_then(|r|r.temperature.map(|_|80))),hotspot:o.max_hotspot.or_else(||reading.and_then(|r|r.hotspot.map(|_|80))),..Default::default()};
-        if policy.phase(reading)=="sensor_unavailable"{return Err("Requested power/temperature protection requires real sensors for the selected PCI GPU".into());}
+        let policy=Policy::configure(o.max_power,o.max_temp,o.max_hotspot,reading)?;
+        if reading.is_none_or(|r|r.temperature.is_none()&&r.hotspot.is_none()){println!("GPU temperature: unavailable. Mining uses driver-managed thermal limits.");}
         let hardware=Hardware::apply(id,telemetry.as_ref(),o)?;
         println!("GPU controls: PCI {} | power sensor {} | max-power {:?} W | temperature {:?} C | hotspot {:?} C | intensity {}%",id.pci.as_deref().unwrap_or("unknown"),telemetry.as_ref().map(|t|t.power_kind).unwrap_or("unavailable"),o.max_power,policy.temperature,policy.hotspot,o.intensity);
         Ok(Self{_hardware:hardware,telemetry,reading,policy,sampled:Instant::now()-Duration::from_secs(1),phase:"mining",intensity:o.intensity})
@@ -158,6 +169,32 @@ impl Monitor {
 
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn unavailable_sensors_allow_default_mining(){
+        for reading in [None,Some(Reading::default())]{
+            let mut p=Policy::configure(None,None,None,reading).unwrap();
+            assert_eq!(p.phase(reading),"mining");
+            assert_eq!(p.phase(None),"mining");
+        }
+    }
+    #[test] fn explicit_limits_require_their_own_sensor(){
+        for (power,temp,hotspot,flag) in [(Some(120.),None,None,"--max-power"),(None,Some(80),None,"--max-temp"),(None,None,Some(80),"--max-hotspot")]{
+            let error=Policy::configure(power,temp,hotspot,None).err().unwrap();
+            assert!(error.contains(flag));
+        }
+    }
+    #[test] fn temperature_protection_does_not_require_power_sensor(){
+        let mut p=Policy::configure(None,None,None,Some(Reading{temperature:Some(50),..Default::default()})).unwrap();
+        assert_eq!(p.temperature,Some(80));
+        assert_eq!(p.phase(Some(Reading{temperature:Some(81),..Default::default()})),"cooling");
+        assert_eq!(p.phase(None),"sensor_unavailable");
+        assert_eq!(p.phase(Some(Reading{temperature:Some(75),..Default::default()})),"mining");
+    }
+    #[test] fn explicit_power_limit_works_without_temperature(){
+        let r=Reading{power:Some(20.),..Default::default()};
+        let mut p=Policy::configure(Some(30.),None,None,Some(r)).unwrap();
+        assert_eq!(p.phase(Some(r)),"mining");
+        assert_eq!(p.phase(None),"sensor_unavailable");
+    }
     #[test] fn thermal_hysteresis_and_missing_sensor_fail_closed(){let mut p=Policy{hotspot:Some(80),..Default::default()};let r=|v|Some(Reading{hotspot:Some(v),..Default::default()});assert_eq!(p.phase(r(81)),"cooling");assert_eq!(p.phase(r(79)),"cooling");assert_eq!(p.phase(None),"sensor_unavailable");assert_eq!(p.phase(r(75)),"mining");}
     #[test] fn power_wait_does_not_resume_at_the_limit(){let mut p=Policy{power:Some(120.),..Default::default()};let r=|v|Some(Reading{power:Some(v),..Default::default()});assert_eq!(p.phase(r(121.)),"power_wait");assert_eq!(p.phase(r(119.)),"power_wait");assert_eq!(p.phase(r(113.)),"mining");}
 }
