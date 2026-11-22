@@ -7,10 +7,10 @@ $NodeDir = Join-Path $Root 'node\official\v2.5.0'
 $NodeExe = Join-Path $NodeDir 'quantum-btc.exe'
 $NodeUrl = 'http://127.0.0.1:24002'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$Config = @{ user=''; device=0; max_power=0; intensity=100; mode='pool'; backend='gpu'; cpu_threads=2; pool='stratum+ssl://ashenward.ru:3336' }
+$Config = @{ user=''; device=0; max_power=0; intensity=100; mode='pool'; backend='gpu'; cpu_threads=2; cpu_intensity=100; pool='stratum+ssl://ashenward.ru:3336' }
 if (Test-Path -LiteralPath $ConfigPath) {
   $saved = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
-  foreach ($name in @('user','device','max_power','intensity','mode','backend','cpu_threads','pool')) {
+  foreach ($name in @('user','device','max_power','intensity','mode','backend','cpu_threads','cpu_intensity','pool')) {
     if ($null -ne $saved.$name) { $Config[$name] = $saved.$name }
   }
 }
@@ -19,18 +19,21 @@ $answer = Read-Host "Mode: pool or solo [$($Config.mode)]"
 if ($answer) { $Config.mode = $answer.ToLowerInvariant() }
 if ($Config.mode -notin @('pool','solo')) { throw 'Choose pool or solo' }
 if ($Config.mode -eq 'pool') {
-  $answer = Read-Host "Backend: cpu or gpu [$($Config.backend)]"
+  $answer = Read-Host "Backend: gpu, cpu or cpu-gpu [$($Config.backend)]"
   if ($answer) { $Config.backend = $answer.ToLowerInvariant() }
-  if ($Config.backend -notin @('cpu','gpu')) { throw 'Choose cpu or gpu' }
+  if ($Config.backend -notin @('cpu','gpu','cpu-gpu')) { throw 'Choose gpu, cpu or cpu-gpu' }
 }
 $answer = Read-Host "Public Q-BTC payout address [$($Config.user)]"
 if ($answer) { $Config.user = $answer }
 & $Miner --validate-address --user $Config.user
 if ($LASTEXITCODE -ne 0) { throw 'Invalid Q-BTC address' }
-if ($Config.mode -eq 'pool' -and $Config.backend -eq 'cpu') {
+if ($Config.mode -eq 'pool' -and $Config.backend -in @('cpu','cpu-gpu')) {
   $answer = Read-Host "CPU threads [$($Config.cpu_threads)]"
   if ($answer) { $Config.cpu_threads = [int]$answer }
-} else {
+  $answer = Read-Host "CPU intensity 1..100 [$($Config.cpu_intensity)]"
+  if ($answer) { $Config.cpu_intensity = [int]$answer }
+}
+if ($Config.mode -eq 'solo' -or $Config.backend -ne 'cpu') {
   & $Miner --list-devices
   $answer = Read-Host "GPU index [$($Config.device)]"
   if ($answer) { $Config.device = [int]$answer }
@@ -48,8 +51,8 @@ if ($Config.mode -eq 'pool') {
   $Config | ConvertTo-Json | Set-Content -LiteralPath $ConfigPath -Encoding utf8
   $worker = $Config.user + '.' + $env:COMPUTERNAME
   $arguments = @('--pool',$Config.pool,'--user',$worker,'--log-file',(Join-Path $Root 'miner.jsonl'),'--stats-file',(Join-Path $Root 'stats.json'))
-  if ($Config.backend -eq 'cpu') { $arguments += @('--cpu','--cpu-threads',[string]$Config.cpu_threads) }
-  else {
+  if ($Config.backend -in @('cpu','cpu-gpu')) { $arguments += @("--$($Config.backend)",'--cpu-threads',[string]$Config.cpu_threads,'--cpu-intensity',[string]$Config.cpu_intensity) }
+  if ($Config.backend -ne 'cpu') {
     $arguments += @('--device',[string]$Config.device,'--intensity',[string]$Config.intensity)
     if ($Config.max_power -gt 0) { $arguments += @('--max-power',[string]$Config.max_power) }
   }

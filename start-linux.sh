@@ -12,23 +12,27 @@ intensity="${C[3]:-100}"
 mode="${C[4]:-pool}"
 backend="${C[5]:-gpu}"
 threads="${C[6]:-2}"
+cpu_intensity="${C[8]:-100}"
 pool="${C[7]:-stratum+ssl://ashenward.ru:3336}"
 if [[ "$pool" == 'stratum+tcp://ashenward.ru:3334' ]]; then pool='stratum+ssl://ashenward.ru:3336'; fi
 read -r -p "Mode: pool or solo [$mode]: " answer
 mode="${answer:-$mode}"
 [[ "$mode" == pool || "$mode" == solo ]] || { echo 'Choose pool or solo';exit 1; }
 if [[ "$mode" == pool ]]; then
-  read -r -p "Backend: cpu or gpu [$backend]: " answer
+  read -r -p "Backend: gpu, cpu or cpu-gpu [$backend]: " answer
   backend="${answer:-$backend}"
-  [[ "$backend" == cpu || "$backend" == gpu ]] || { echo 'Choose cpu or gpu';exit 1; }
+  [[ "$backend" == cpu || "$backend" == gpu || "$backend" == cpu-gpu ]] || { echo 'Choose gpu, cpu or cpu-gpu';exit 1; }
 fi
 read -r -p "Public Q-BTC payout address [$wallet]: " answer
 wallet="${answer:-$wallet}"
 "$MINER" --validate-address --user "$wallet"
-if [[ "$mode" == pool && "$backend" == cpu ]]; then
+if [[ "$mode" == pool && "$backend" != gpu ]]; then
   read -r -p "CPU threads [$threads]: " answer
   threads="${answer:-$threads}"
-else
+  read -r -p "CPU intensity 1..100 [$cpu_intensity]: " answer
+  cpu_intensity="${answer:-$cpu_intensity}"
+fi
+if [[ "$mode" == solo || "$backend" != cpu ]]; then
 "$MINER" --list-devices
 read -r -p "GPU index [$device]: " answer
 device="${answer:-$device}"
@@ -49,11 +53,12 @@ else
 fi
 read -r -p 'Start mining? Type YES: ' confirm
 [[ "$confirm" == YES ]] || exit 0
-printf '%s\n' "$wallet" "$device" "$power" "$intensity" "$mode" "$backend" "$threads" "$pool" > "$CONFIG"
+printf '%s\n' "$wallet" "$device" "$power" "$intensity" "$mode" "$backend" "$threads" "$pool" "$cpu_intensity" > "$CONFIG"
 if [[ "$mode" == pool ]]; then
   worker="$(hostname -s)";worker="${worker//[^a-zA-Z0-9_-]/_}"
   args=(--pool "$pool" --user "$wallet.$worker" --log-file "$ROOT/miner.jsonl" --stats-file "$ROOT/stats.json")
-  if [[ "$backend" == cpu ]]; then args+=(--cpu --cpu-threads "$threads");else args+=(--device "$device" "${power_args[@]}" --intensity "$intensity");fi
+  if [[ "$backend" != gpu ]]; then args+=("--$backend" --cpu-threads "$threads" --cpu-intensity "$cpu_intensity");fi
+  if [[ "$backend" != cpu ]]; then args+=(--device "$device" "${power_args[@]}" --intensity "$intensity");fi
   exec "$MINER" "${args[@]}"
 fi
 bash "$ROOT/node-linux.sh"

@@ -21,7 +21,7 @@ pub struct Options {
     pub core_clock:Option<u32>,pub memory_clock:Option<u32>,pub fan:Option<u8>,pub intensity:u8,
     pub max_temp:Option<i32>,pub max_hotspot:Option<i32>,pub stats_file:Option<String>,
     pub nonce_base:Option<u64>,pub nonce_lane:usize,pub nonce_lanes:usize,pub chain_state:Option<String>,
-    pub cpu:bool,
+    pub cpu:bool,pub cpu_gpu:bool,pub cpu_intensity:u8,
 }
 fn options()->Result<(Options,String),String>{
     let total=std::thread::available_parallelism().map(|n|n.get()).unwrap_or(1);
@@ -29,19 +29,21 @@ fn options()->Result<(Options,String),String>{
         unroll:true,pool:String::new(),user:String::new(),debug:false,log:None,stop_accepted:0,mine_seconds:0,
         node:"http://127.0.0.1:24002".into(),min_height:23214,
         max_power:None,power_limit:None,power_percent:None,core_clock:None,memory_clock:None,fan:None,intensity:100,
-        max_temp:None,max_hotspot:None,stats_file:None,nonce_base:None,nonce_lane:0,nonce_lanes:1,chain_state:None,cpu:false};
+        max_temp:None,max_hotspot:None,stats_file:None,nonce_base:None,nonce_lane:0,nonce_lanes:1,chain_state:None,cpu:false,cpu_gpu:false,cpu_intensity:100};
     let mut mode="solo".to_string();let mut args=std::env::args().skip(1);
     while let Some(a)=args.next(){match a.as_str(){
         "--benchmark"=>mode="benchmark".into(),"--gpu-benchmark"=>mode="gpu-benchmark".into(),"--tune"=>mode="tune".into(),"--self-test"=>mode="test".into(),
         "--list-devices"=>mode="list".into(),"--list-devices-json"=>mode="list-json".into(),"--chain-watch"=>mode="chain-watch".into(),"--help"|"-h"=>mode="help".into(),"--debug"=>o.debug=true,
         "--solo"=>mode="solo".into(),"--validate-address"=>mode="validate-address".into(),
         "--cpu"=>o.cpu=true,
+        "--cpu-gpu"=>o.cpu_gpu=true,
         _=>{let v=args.next().ok_or(format!("Missing value for {a}"))?;match a.as_str(){
             "--device"=>o.device=v.parse().map_err(|_|"Bad device")?,
             "--worksize"=>o.worksize=v.parse().map_err(|_|"Bad worksize")?,
             "--batch"=>o.batch=v.parse().map_err(|_|"Bad batch")?,
             "--seconds"=>o.seconds=v.parse().map_err(|_|"Bad seconds")?,
             "--cpu-threads"=>o.threads=v.parse().map_err(|_|"Bad thread count")?,
+            "--cpu-intensity"=>o.cpu_intensity=v.parse().map_err(|_|"Bad CPU intensity")?,
             "--unroll"=>o.unroll=match v.as_str(){"0"=>false,"1"=>true,_=>return Err("unroll is 0 or 1".into())},
             "--max-power"=>o.max_power=Some(v.parse().map_err(|_|"Bad max-power")?),
             "--power-limit"=>o.power_limit=Some(v.parse().map_err(|_|"Bad power-limit")?),
@@ -67,6 +69,9 @@ fn options()->Result<(Options,String),String>{
     if ![64,128,256].contains(&o.worksize)||o.batch==0||o.batch%(o.worksize*2)!=0||o.batch>16777216{
         return Err("worksize must be 64/128/256; batch must be divisible by 2 * worksize and <=16777216".into());}
     if o.seconds==0||o.threads==0{return Err("seconds and cpu-threads must be positive".into());}
+    if !(1..=100).contains(&o.cpu_intensity){return Err("cpu-intensity must be 1..100".into());}
+    if o.cpu&&o.cpu_gpu{return Err("Choose --cpu or --cpu-gpu, not both".into());}
+    if o.cpu_gpu&&mode!="pool"&&mode!="help"{return Err("Use --cpu-gpu with --pool for combined CPU/GPU mining".into());}
     if o.nonce_lanes==0||o.nonce_lanes>256||o.nonce_lane>=o.nonce_lanes{return Err("Invalid nonce lane assignment".into());}
     if o.nonce_lanes>1&&o.nonce_base.is_none(){return Err("Multi-GPU nonce lanes require a common --nonce-base".into());}
     if !(1..=100).contains(&o.intensity)||o.fan.is_some_and(|v|v>100)||o.max_power.is_some_and(|v|!v.is_finite()||v<=0.)||o.power_limit.is_some_and(|v|!v.is_finite()||v<=0.)||o.max_temp.is_some_and(|v|!(40..=100).contains(&v))||o.max_hotspot.is_some_and(|v|!(40..=105).contains(&v)) {return Err("Invalid GPU limits".into());}
@@ -144,7 +149,7 @@ fn run()->Result<(),String>{
         println!("Pool GPU: --pool stratum+ssl://ashenward.ru:3336 --user QBTC_ADDRESS.worker --device 0\nPool CPU: --pool stratum+ssl://ashenward.ru:3336 --user QBTC_ADDRESS.worker --cpu --cpu-threads N\nPool fee: 1.5%; minimum payout: 10 QBTC. The SOLO fee does not apply to pool mining.");
     }
     ctrlc::set_handler(||SIGNAL_STOP.store(true,std::sync::atomic::Ordering::Relaxed)).map_err(|e|e.to_string())?;
-    let(o,mode)=options()?;if mode=="help"{println!("lackminer-qbtc --list-devices | --self-test | --benchmark | --tune\n--device 0 --worksize 128 --batch 16777216 --unroll 1 --seconds 10 --cpu-threads N\n--solo --node http://127.0.0.1:24002 --user QBTC_ADDRESS --debug --log-file PATH\n--stop-after-accepted N --mine-seconds N\n--max-power W --power-limit W --power-percent P --core-clock MHZ --memory-clock MHZ\n--fan PERCENT --intensity 1..100 --max-temp C --max-hotspot C --stats-file PATH");return Ok(());}
+    let(o,mode)=options()?;if mode=="help"{println!("lackminer-qbtc --list-devices | --self-test | --benchmark | --tune\n--device 0 --worksize 128 --batch 16777216 --unroll 1 --seconds 10 --cpu-threads N\n--cpu | --cpu-gpu (pool); --cpu-intensity 1..100\n--solo --node http://127.0.0.1:24002 --user QBTC_ADDRESS --debug --log-file PATH\n--stop-after-accepted N --mine-seconds N\n--max-power W --power-limit W --power-percent P --core-clock MHZ --memory-clock MHZ\n--fan PERCENT --intensity 1..100 --max-temp C --max-hotspot C --stats-file PATH");return Ok(());}
     if mode=="validate-address"{solo::validate_address(&o.user)?;println!("Q-BTC payout address valid");return Ok(());}
     if mode=="list"{return opencl::list();}
     if mode=="list-json"{return opencl::list_json();}

@@ -11,7 +11,7 @@ Download the [latest release](https://github.com/Knop3dev/LackMain/releases/late
 - Windows: extract the Windows archive and run `start-windows.cmd`.
 - Linux: extract the Linux archive and run `bash start-linux.sh`.
 
-Choose `pool`, select `cpu` or `gpu`, enter your public Q-BTC address and confirm the start. GPU mode requires the manufacturer's OpenCL driver. CPU mode does not require a GPU. Pool mining does not require a local node.
+Choose `pool`, select `gpu`, `cpu` or `cpu-gpu`, enter your public Q-BTC address and confirm the start. GPU is the default; CPU mining is enabled only when selected. GPU mode requires the manufacturer's OpenCL driver. CPU mode does not require a GPU. Pool mining does not require a local node.
 
 LackPool requires **0.3.1 or newer** and TLS on port **3336**. The miner verifies the certificate chain and server name. It does not fall back to plaintext. Port 3334 is closed; update old pool URLs in saved settings and Hive OS Flight Sheets.
 
@@ -28,6 +28,16 @@ lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.c
 ```
 
 On Windows use `lackminer-qbtc.exe`; on Linux use `./lackminer-qbtc`. `--password x` is optional. Press Ctrl+C to stop. Pool connections reconnect automatically.
+
+### CPU + GPU
+
+```sh
+lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.mixed --cpu-gpu --device 0 --cpu-threads 2 --cpu-intensity 50 --intensity 50
+```
+
+`--cpu-gpu` runs the selected OpenCL GPU (integrated or discrete) and CPU together on the pool. They share a connection and search separate nonce ranges. Logs and JSON statistics include separate CPU/GPU rates and a combined total. Combined mode uses the GPU share difficulty; CPU shares may arrive less frequently than in CPU-only mode, with the same work-based accounting.
+
+`--cpu` uses only the CPU. Without either flag, only the GPU runs. `--cpu-threads N` sets the number of CPU mining threads. `--cpu-intensity 1..100` controls CPU work/pause time; `--intensity 1..100` independently controls GPU work/pause time. These settings are not wattage limits. CPU options apply to pool mining; SOLO remains GPU-only. Windows and Linux launchers save the selected mode and both intensities.
 
 ## Rewards
 
@@ -54,7 +64,7 @@ Use an Ubuntu 22.04 or newer image with OpenCL drivers. Create a Custom miner Fl
 | Setting | Value |
 | --- | --- |
 | Name | `lackminer-qbtc` |
-| Installation URL | [Hive OS archive](https://github.com/Knop3dev/LackMain/releases/download/v0.3.2/lackminer-qbtc-0.3.2-hiveos.tar.gz) |
+| Installation URL | [Hive OS archive](https://github.com/Knop3dev/LackMain/releases/download/v0.3.3/lackminer-qbtc-0.3.3-hiveos.tar.gz) |
 | Wallet template | Your public Q-BTC address |
 | Pool URL | `stratum+ssl://ashenward.ru:3336` |
 | Extra config | `--devices all` |
@@ -110,3 +120,13 @@ lackminer-qbtc --pool stratum+ssl://ashenward.ru:3336 --user YOUR_QBTC_ADDRESS.c
 В режиме SOLO сохраняется отдельная комиссия разработчика 10%. Для SOLO нужна синхронизированная локальная нода. `--max-power` ограничивает работу по показаниям датчика и допускает краткие превышения; аппаратное ограничение мощности задаётся отдельно при поддержке драйвера.
 
 Встроенная графика может майнить без датчиков температуры и мощности. В стартовом скрипте значение мощности 0 оставляет управление драйверу; это настройка по умолчанию для новой конфигурации. Сохранённый лимит не меняется автоматически: при отсутствии датчика мощности выберите 0. Явно заданные `--max-power`, `--max-temp` и `--max-hotspot` требуют соответствующих датчиков. Защита по доступным температурным датчикам сохраняется.
+
+### CPU и GPU одновременно
+
+По умолчанию работает только GPU. `--cpu` включает только процессор; `--cpu-gpu` — процессор вместе с выбранной встроенной или дискретной OpenCL-картой. Совместный режим доступен на пуле, SOLO остаётся GPU-режимом.
+
+```text
+lackminer-qbtc.exe --pool stratum+ssl://ashenward.ru:3336 --user ВАШ_QBTC_АДРЕС.mixed --cpu-gpu --device 0 --cpu-threads 2 --cpu-intensity 50 --intensity 50
+```
+
+`--cpu-threads` задаёт число потоков процессора, `--cpu-intensity` — его долю времени вычислений, `--intensity` — долю времени GPU. Это не ограничение потребления в ваттах. CPU и GPU перебирают разные диапазоны nonce; скорости отображаются отдельно и суммарно. В совместном режиме сложность шар общая, как для GPU, поэтому процессор может отправлять их реже, чем при отдельном CPU-майнинге. Начисления по выполненной работе не меняются. В стартовых скриптах Windows/Linux можно выбрать `gpu`, `cpu` или `cpu-gpu`; выбор и настройки сохраняются.

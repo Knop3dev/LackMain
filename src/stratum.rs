@@ -25,7 +25,15 @@ fn endpoint(value:&str)->Result<(String,u16,bool),String>{
 
 #[derive(Clone)]
 struct Job{job_id:u64,target:u64,header:[u8;120],version:u64,range:Option<(u64,u64)>}
-struct Share{job:Job,nonce:u64,digest:[u8;32]}
+struct Share{job:Job,nonce:u64,digest:[u8;32],backend:&'static str}
+fn worker_job(mut job:Job,cpu:bool,combined:bool)->Job{
+    if combined{
+        let (start,end)=job.range.unwrap_or((0,u64::MAX));
+        let middle=start+(end-start)/2;
+        job.range=Some(if cpu{(middle,end)}else{(start,middle)});
+    }
+    job
+}
 static ACCEPTED:AtomicU64=AtomicU64::new(0);
 static REJECTED:AtomicU64=AtomicU64::new(0);
 static STALE:AtomicU64=AtomicU64::new(0);
@@ -44,24 +52,26 @@ fn decode_job(v:&Value,version:u64)->Result<Job,String>{
         header:pow::encode_header(number(4)?,&decode32(&p[1])?,&decode32(&p[2])?,&decode32(&p[3])?,0,number(5)?)})
 }
 fn log(file:&mut Option<File>,value:Value){if let Some(f)=file {let _=writeln!(f,"{value}");let _=f.flush();}}
-fn cpu_worker(o:&Options,current:Arc<RwLock<Option<Job>>>,running:Arc<AtomicBool>,hashes:Arc<AtomicU64>,tx:tokio::sync::mpsc::Sender<Result<Share,String>>)->Result<(),String>{
-    let mut handles=Vec::new();
+fn cpu_worker(o:&Options,current:Arc<RwLock<Option<Job>>>,running:Arc<AtomicBool>,hashes:Arc<AtomicU64>,backend_hashes:Arc<AtomicU64>,tx:tokio::sync::mpsc::Sender<Result<Share,String>>)->Result<(),String>{
+    let mut handles=Vec::new();let combined=o.cpu_gpu;let intensity=o.cpu_intensity;
     for lane in 0..o.threads{
-        let current=current.clone();let running=running.clone();let hashes=hashes.clone();let tx=tx.clone();let threads=o.threads as u64;
+        let current=current.clone();let running=running.clone();let hashes=hashes.clone();let backend_hashes=backend_hashes.clone();let tx=tx.clone();let threads=o.threads as u64;
         handles.push(std::thread::spawn(move||{
             let mut version=0;let mut nonce=lane as u64;
             while running.load(Ordering::Relaxed)&&!crate::interrupted(){
                 let job=current.read().unwrap().clone();
                 let Some(job)=job else{std::thread::sleep(Duration::from_millis(20));continue;};
-                if version!=job.version{version=job.version;nonce=job.range.map(|r|r.0).unwrap_or(0)+lane as u64;}
-                let mut header=job.header;let mut count=0;
+                let job=worker_job(job,true,combined);
+                if version!=job.version{version=job.version;nonce=job.range.map(|r|r.0).unwrap_or(0).saturating_add(lane as u64);}
+                let mut header=job.header;let mut count=0;let dispatched=Instant::now();
                 for _ in 0..4096{
                     if job.range.is_some_and(|r|nonce>=r.1){break;}
                     header[104..112].copy_from_slice(&nonce.to_be_bytes());let digest=pow::hash_header(&header);count+=1;
-                    if pow::meets_target(&digest,job.target)&&tx.blocking_send(Ok(Share{job:job.clone(),nonce,digest})).is_err(){return;}
-                    nonce=nonce.wrapping_add(threads);
+                    if pow::meets_target(&digest,job.target)&&tx.blocking_send(Ok(Share{job:job.clone(),nonce,digest,backend:"CPU"})).is_err(){return;}
+                    nonce=if job.range.is_some(){nonce.checked_add(threads).unwrap_or(u64::MAX)}else{nonce.wrapping_add(threads)};
                 }
-                hashes.fetch_add(count,Ordering::Relaxed);
+                hashes.fetch_add(count,Ordering::Relaxed);backend_hashes.fetch_add(count,Ordering::Relaxed);
+                if count>0&&intensity<100{std::thread::sleep(dispatched.elapsed().mul_f64(100.0/f64::from(intensity)-1.0));}
                 if count==0{std::thread::sleep(Duration::from_millis(20));}
             }
         }));
@@ -101,11 +111,17 @@ pub async fn mine(o:Options)->Result<(),String>{
     let base_hashes=HASHES.load(Ordering::Relaxed);
     let current=Arc::new(RwLock::new(None::<Job>));let running=Arc::new(AtomicBool::new(true));let hashes=Arc::new(AtomicU64::new(base_hashes));
     let(tx,mut rx)=tokio::sync::mpsc::channel::<Result<Share,String>>(64);
+    let cpu_hashes=Arc::new(AtomicU64::new(0));let gpu_hashes=Arc::new(AtomicU64::new(0));
+    let cpu_worker_handle=if o.cpu_gpu{
+        let opts=o.clone();let active=current.clone();let flag=running.clone();let counter=hashes.clone();let backend=cpu_hashes.clone();let sender=tx.clone();
+        Some(std::thread::spawn(move||{if let Err(e)=cpu_worker(&opts,active,flag,counter,backend,sender.clone()){let _=sender.blocking_send(Err(e));}}))
+    }else{None};
+    let cpu_counter=cpu_hashes.clone();let gpu_counter=gpu_hashes.clone();
     let control_stats=Arc::new(RwLock::new(Value::Null));let worker_stats=control_stats.clone();
     let active=current.clone();let flag=running.clone();let counter=hashes.clone();let opts=o.clone();
     let worker=std::thread::spawn(move||{
         let work=(||->Result<(),String>{
-            if opts.cpu{return cpu_worker(&opts,active,flag,counter,tx.clone());}
+            if opts.cpu{return cpu_worker(&opts,active,flag,counter,cpu_counter,tx.clone());}
             let gpu=Gpu::new(opts.device,opts.unroll)?;crate::self_test(&gpu,opts.worksize)?;let mut version=0;
             let mut controls=crate::gpu_control::Monitor::new(&gpu.identity,&opts)?;
             let mut nonce=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
@@ -113,6 +129,7 @@ pub async fn mine(o:Options)->Result<(),String>{
                 let ready=controls.ready();*worker_stats.write().unwrap()=controls.stats();
                 if !ready{std::thread::sleep(Duration::from_millis(50));continue;}
                 if let Some(j)=job{
+                    let j=worker_job(j,false,opts.cpu_gpu);
                     if j.version!=version{gpu.set_job(&j.header)?;version=j.version;if let Some((base,_))=j.range{nonce=base;}}
                     let probability=(j.target as f64+1.0)/18446744073709551616.0;
                     let safe=(4.0/probability).min(opts.batch as f64) as usize;
@@ -126,17 +143,17 @@ pub async fn mine(o:Options)->Result<(),String>{
                     let dispatched=Instant::now();
                     let(found,_)=gpu.search(nonce,j.target,batch,opts.worksize)?;
                     controls.after_dispatch(dispatched.elapsed());
-                    nonce=nonce.wrapping_add(batch as u64);counter.fetch_add(batch as u64,Ordering::Relaxed);
+                    nonce=nonce.wrapping_add(batch as u64);counter.fetch_add(batch as u64,Ordering::Relaxed);gpu_counter.fetch_add(batch as u64,Ordering::Relaxed);
                     for n in found{let mut h=j.header;h[104..112].copy_from_slice(&n.to_be_bytes());let digest=pow::hash_header(&h);
                         if !pow::meets_target(&digest,j.target){return Err(format!("GPU share CPU verification failed nonce={n}"));}
-                        if tx.blocking_send(Ok(Share{job:j.clone(),nonce:n,digest})).is_err(){return Ok(());}
+                        if tx.blocking_send(Ok(Share{job:j.clone(),nonce:n,digest,backend:"OpenCL"})).is_err(){return Ok(());}
                     }
                 }else{std::thread::sleep(Duration::from_millis(20));}
             }Ok(())})();if let Err(e)=work{let _=tx.blocking_send(Err(e));}
     });
     let mut pending=HashMap::<u64,Value>::new();let mut id=3u64;let mut version=0u64;let mut authorized=false;
     let(mut accepted,mut rejected,mut stale)=(ACCEPTED.load(Ordering::Relaxed),REJECTED.load(Ordering::Relaxed),STALE.load(Ordering::Relaxed));let mut line=String::new();
-    let started=Instant::now();let mut tick=tokio::time::interval(Duration::from_secs(5));let mut last=Instant::now();let mut last_count=base_hashes;
+    let started=Instant::now();let mut tick=tokio::time::interval(Duration::from_secs(5));let mut last=Instant::now();let mut last_count=base_hashes;let mut last_cpu=0;let mut last_gpu=0;
     let(stop_tx,mut stop_rx)=tokio::sync::mpsc::channel::<()>(1);
     std::thread::spawn(move||{
         use std::io::BufRead;
@@ -173,16 +190,20 @@ pub async fn mine(o:Options)->Result<(),String>{
                 let s=share.ok_or("GPU worker stopped")??;
                 let active=current.read().unwrap().clone();if active.as_ref().map(|j|j.version)!=Some(s.job.version){stale+=1;continue;}
                 let request=json!({"id":id,"method":"mining.submit","params":[o.user,s.job.job_id,s.nonce]});
-                let proof=json!({"job_id":s.job.job_id,"nonce":s.nonce,"header":hex(&s.job.header),"digest":hex(&s.digest),"target":s.job.target,"cpu_verified":true});
+                let proof=json!({"job_id":s.job.job_id,"nonce":s.nonce,"header":hex(&s.job.header),"digest":hex(&s.digest),"target":s.job.target,"cpu_verified":true,"backend":s.backend});
                 log(&mut file,json!({"direction":"TX","message":request,"proof":proof}));
                 if o.debug{println!("TX {request}");}
                 write.write_all(format!("{request}\n").as_bytes()).await.map_err(|e|e.to_string())?;write.flush().await.map_err(|e|e.to_string())?;pending.insert(id,proof);id+=1;
             }
             _=tick.tick()=>{
-                let count=hashes.load(Ordering::Relaxed);let rate=(count-last_count) as f64/last.elapsed().as_secs_f64();last_count=count;last=Instant::now();
-                println!("{} {:.3} MH/s | Accepted {accepted} | Rejected {rejected} | Stale {stale}",if o.cpu{"CPU"}else{"OpenCL"},rate/1e6);
-                let stats=json!({"event":"stats","hashrate":rate,"hashes":count,"accepted":accepted,
-                    "rejected":rejected,"stale":stale,"elapsed_seconds":started.elapsed().as_secs_f64(),"pending":pending.len(),"controls":control_stats.read().unwrap().clone(),"backend":if o.cpu{"CPU"}else{"OpenCL"},"updated_at":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()});
+                let count=hashes.load(Ordering::Relaxed);let elapsed=last.elapsed().as_secs_f64();let rate=(count-last_count) as f64/elapsed;
+                let cpu_count=cpu_hashes.load(Ordering::Relaxed);let gpu_count=gpu_hashes.load(Ordering::Relaxed);
+                let cpu_rate=(cpu_count-last_cpu) as f64/elapsed;let gpu_rate=(gpu_count-last_gpu) as f64/elapsed;
+                last_cpu=cpu_count;last_gpu=gpu_count;last_count=count;last=Instant::now();
+                if o.cpu_gpu{println!("CPU {:.3} MH/s | OpenCL {:.3} MH/s",cpu_rate/1e6,gpu_rate/1e6);}
+                println!("{} {:.3} MH/s | Accepted {accepted} | Rejected {rejected} | Stale {stale}",if o.cpu_gpu{"CPU+OpenCL"}else if o.cpu{"CPU"}else{"OpenCL"},rate/1e6);
+                let stats=json!({"event":"stats","hashrate":rate,"cpu_hashrate":cpu_rate,"gpu_hashrate":gpu_rate,"cpu_hashes":cpu_count,"gpu_hashes":gpu_count,"cpu_threads":if o.cpu||o.cpu_gpu{o.threads}else{0},"cpu_intensity":o.cpu_intensity,"hashes":count,"accepted":accepted,
+                    "rejected":rejected,"stale":stale,"elapsed_seconds":started.elapsed().as_secs_f64(),"pending":pending.len(),"controls":control_stats.read().unwrap().clone(),"backend":if o.cpu_gpu{"CPU+OpenCL"}else if o.cpu{"CPU"}else{"OpenCL"},"updated_at":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()});
                 if let Some(path)=&o.stats_file{let path=std::path::Path::new(path);let temporary=path.with_extension("tmp");if std::fs::write(&temporary,stats.to_string()).is_ok(){let _=std::fs::rename(temporary,path);}}
                 log(&mut file,stats);
                 if crate::interrupted(){return Ok(());}
@@ -192,16 +213,28 @@ pub async fn mine(o:Options)->Result<(),String>{
         }}
     }.await;
     running.store(false,Ordering::Relaxed);rx.close();drop(rx);
-    let _=tokio::task::spawn_blocking(move||worker.join()).await;
+    let _=tokio::task::spawn_blocking(move||{let _=worker.join();if let Some(handle)=cpu_worker_handle{let _=handle.join();}}).await;
     ACCEPTED.store(accepted,Ordering::Relaxed);REJECTED.store(rejected,Ordering::Relaxed);STALE.store(stale,Ordering::Relaxed);HASHES.store(hashes.load(Ordering::Relaxed),Ordering::Relaxed);
     let summary=json!({"event":"summary","pool":o.pool,"accepted":accepted,"rejected":rejected,"stale":stale,
-        "hashes":hashes.load(Ordering::Relaxed),"seconds":started.elapsed().as_secs_f64(),"pending":pending.len()});
+        "hashes":hashes.load(Ordering::Relaxed),"cpu_hashes":cpu_hashes.load(Ordering::Relaxed),"gpu_hashes":gpu_hashes.load(Ordering::Relaxed),"seconds":started.elapsed().as_secs_f64(),"pending":pending.len()});
     println!("{summary}");log(&mut file,summary);result
 }
 
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test] fn combined_ranges_are_disjoint_and_cover_assigned_work(){
+        for range in [Some((0,1)),Some((11,1024)),Some((1<<48,2<<48)),Some((u64::MAX-100,u64::MAX)),None]{
+            let job=Job{job_id:1,target:1,header:[0;120],version:1,range};
+            let cpu=worker_job(job.clone(),true,true).range.unwrap();
+            let gpu=worker_job(job.clone(),false,true).range.unwrap();
+            assert_eq!(gpu.0,range.unwrap_or((0,u64::MAX)).0);
+            assert_eq!(cpu.1,range.unwrap_or((0,u64::MAX)).1);
+            assert_eq!(gpu.1,cpu.0);
+            assert_eq!(worker_job(job.clone(),true,false).range,range);
+            assert_eq!(worker_job(job,false,false).range,range);
+        }
+    }
     #[test] fn official_job_preserves_network_target_not_share_target(){
         let v=json!({"params":[42,"00".repeat(32),"11".repeat(32),"22".repeat(32),17,123,456]});
         let j=decode_job(&v,1).unwrap();assert_eq!(j.target,456);assert_eq!(&j.header[112..120],&123u64.to_be_bytes());
